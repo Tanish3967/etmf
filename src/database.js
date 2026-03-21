@@ -385,6 +385,119 @@ export async function initDB() {
       UNIQUE(name, tenant_id)
     );
 
+    -- ── STUDY SETUP & DIA MODEL ──────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS trial_templates (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL,
+      name           TEXT NOT NULL,
+      description    TEXT,
+      version        TEXT DEFAULT '1.0',
+      is_active      INTEGER DEFAULT 1,
+      created_at     TEXT DEFAULT (datetime('now')),
+      created_by     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS dia_model_items (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      trial_template_id TEXT REFERENCES trial_templates(id),
+      zone             TEXT NOT NULL,
+      zone_name        TEXT NOT NULL,
+      section          TEXT NOT NULL,
+      section_name     TEXT NOT NULL,
+      artifact         TEXT NOT NULL,
+      artifact_name    TEXT NOT NULL,
+      level            TEXT, -- 'Trial', 'Country', 'Site'
+      is_mandatory     INTEGER DEFAULT 0,
+      sponsor_overlay  INTEGER DEFAULT 0,
+      created_at       TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── FORMS & LOGS ─────────────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS forms_schemas (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL,
+      name           TEXT NOT NULL,
+      description    TEXT,
+      schema_json    TEXT NOT NULL,
+      is_active      INTEGER DEFAULT 1,
+      created_at     TEXT DEFAULT (datetime('now')),
+      created_by     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS forms_data (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      form_schema_id   TEXT NOT NULL REFERENCES forms_schemas(id),
+      study_id         TEXT REFERENCES studies(id),
+      data_json        TEXT NOT NULL,
+      created_at       TEXT DEFAULT (datetime('now')),
+      created_by       TEXT NOT NULL REFERENCES users(id)
+    );
+
+    -- ── WORKFLOW EXTENSIONS ──────────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS workflow_templates (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL,
+      name           TEXT NOT NULL,
+      description    TEXT,
+      steps_json     TEXT NOT NULL,
+      is_active      INTEGER DEFAULT 1,
+      created_at     TEXT DEFAULT (datetime('now')),
+      created_by     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS user_delegations (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL,
+      delegator_id   TEXT NOT NULL REFERENCES users(id),
+      delegatee_id   TEXT NOT NULL REFERENCES users(id),
+      start_date     TEXT NOT NULL,
+      end_date       TEXT,
+      is_active      INTEGER DEFAULT 1,
+      created_at     TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS annotations (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      document_id      TEXT NOT NULL REFERENCES documents(id),
+      user_id          TEXT NOT NULL REFERENCES users(id),
+      annotation_type  TEXT NOT NULL, -- Note, Signature, Redaction
+      annotation_text  TEXT,
+      page_number      INTEGER DEFAULT 1,
+      position_x       REAL DEFAULT 0,
+      position_y       REAL DEFAULT 0,
+      created_at       TEXT DEFAULT (datetime('now'))
+    );
+
+    -- ── REPOSITORY & PLACEHOLDERS ────────────────────────────────────
+    CREATE TABLE IF NOT EXISTS placeholders (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      study_id         TEXT NOT NULL REFERENCES studies(id),
+      folder_id        TEXT REFERENCES folder_configs(id),
+      artifact_code    TEXT NOT NULL,
+      artifact_name    TEXT NOT NULL,
+      zone             TEXT,
+      section          TEXT,
+      expected_by_date TEXT,
+      is_mandatory     INTEGER DEFAULT 1,
+      na_designated    INTEGER DEFAULT 0,
+      created_at       TEXT DEFAULT (datetime('now')),
+      created_by       TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS file_plans (
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      study_id         TEXT NOT NULL REFERENCES studies(id),
+      plan_name        TEXT NOT NULL,
+      plan_json        TEXT NOT NULL,
+      milestone_date   TEXT,
+      created_at       TEXT DEFAULT (datetime('now'))
+    );
+
     -- ── INDEXES ──────────────────────────────────────────────────────
     CREATE INDEX IF NOT EXISTS idx_docs_study      ON documents(study_id, tenant_id);
     CREATE INDEX IF NOT EXISTS idx_docs_status     ON documents(status, tenant_id);
@@ -405,6 +518,17 @@ export async function initDB() {
   addColumn('documents', 'active', 'INTEGER DEFAULT 1');
   addColumn('documents', 'is_pinned', 'INTEGER DEFAULT 0');
   addColumn('documents', 'is_redacted', 'INTEGER DEFAULT 0');
+  
+  // Phase 2: User profile enhancements
+  addColumn('users', 'first_name', 'TEXT');
+  addColumn('users', 'last_name', 'TEXT');
+  addColumn('users', 'designation', 'TEXT');
+  addColumn('users', 'description', 'TEXT');
+  
+  // Phase 3: QC Enhancements
+  addColumn('queries', 'severity', "TEXT DEFAULT 'Medium'");
+  addColumn('queries', 'responses', "TEXT DEFAULT '[]'");
+  addColumn('queries', 'audit_comments', 'TEXT');
 
   await seedDemoData();
   console.log('✅ Database initialised');

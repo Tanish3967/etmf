@@ -5,6 +5,7 @@ import { Router as R } from 'express';
 import { v4 as uuid } from 'uuid';
 import { getDB, appendAudit } from '../database.js';
 import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
+import bcrypt from 'bcrypt';
 
 export const queryRoutes = R();
 queryRoutes.use(requireAuth);
@@ -429,6 +430,74 @@ adminRoutes.put('/functional-roles/:id', (req, res) => {
   res.json({ message: 'Functional role updated', role: db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(req.params.id) });
 });
 
+// ── USER MANAGEMENT ──────────────────────────────────────────────────
+adminRoutes.get('/users', (req, res) => {
+  const db = getDB();
+  const users = db.prepare('SELECT id, name as username, email, first_name, last_name, dept, designation, description, active as is_active FROM users WHERE tenant_id = ? ORDER BY first_name, last_name').all(req.tenantId);
+  
+  // Attach assigned functional roles for each user
+  const rolesStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
+  users.forEach(u => {
+    u.functional_roles = rolesStmt.all(u.id).map(r => r.role_id);
+  });
+  
+  res.json({ users });
+});
+
+adminRoutes.post('/users', async (req, res) => {
+  const db = getDB();
+  const { username, email, first_name, last_name, dept, designation, description, password, is_active, functional_roles } = req.body;
+  if (!username || !email) return res.status(400).json({ error: 'Username and email required' });
+  
+  const id = uuid();
+  const activeFlag = is_active === false ? 0 : 1;
+  const hash = await bcrypt.hash(password || 'Clinion@123', 12);
+  
+  try {
+    db.prepare('INSERT INTO users (id, name, email, password_hash, first_name, last_name, dept, designation, description, active, tenant_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, username, email, hash, first_name || '', last_name || '', dept || '', designation || '', description || '', activeFlag, req.tenantId);
+      
+    if (functional_roles && Array.isArray(functional_roles)) {
+      const insRole = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+      functional_roles.forEach(roleId => insRole.run(id, roleId));
+    }
+    
+    appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Created', objectType: 'user', objectId: id, objectName: username, ip: req.ip });
+    res.status(201).json({ message: 'User created successfully', id });
+  } catch(e) {
+    if(e.message.includes('UNIQUE')) return res.status(409).json({ error: 'Username or email already exists' });
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+adminRoutes.put('/users/:id', async (req, res) => {
+  const db = getDB();
+  const { username, email, first_name, last_name, dept, designation, description, password, is_active, functional_roles } = req.body;
+  
+  const activeFlag = is_active === false ? 0 : 1;
+  let q = 'UPDATE users SET name = ?, email = ?, first_name = ?, last_name = ?, dept = ?, designation = ?, description = ?, active = ?';
+  const params = [username, email, first_name || '', last_name || '', dept || '', designation || '', description || '', activeFlag];
+  
+  if (password) {
+    q += ', password_hash = ?';
+    params.push(await bcrypt.hash(password, 12));
+  }
+  
+  q += ' WHERE id = ? AND tenant_id = ?';
+  params.push(req.params.id, req.tenantId);
+  
+  db.prepare(q).run(...params);
+  
+  if (functional_roles && Array.isArray(functional_roles)) {
+    db.prepare('DELETE FROM user_functional_roles WHERE user_id = ?').run(req.params.id);
+    const insRole = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+    functional_roles.forEach(roleId => insRole.run(req.params.id, roleId));
+  }
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Updated', objectType: 'user', objectId: req.params.id, objectName: username, ip: req.ip });
+  res.json({ message: 'User updated successfully' });
+});
+
 // ── SYSTEM CODELISTS ─────────────────────────────────────────────────
 adminRoutes.get('/system-codelists', (req, res) => {
   const db = getDB();
@@ -492,10 +561,58 @@ adminRoutes.put('/organization-profiles/:id', (req, res) => {
   res.json({ message: 'Organization profile updated', profile: db.prepare('SELECT * FROM organization_profiles WHERE id = ?').get(req.params.id) });
 });
 
+// ── WORKFLOW TEMPLATES ───────────────────────────────────────────────
+adminRoutes.get('/workflow-templates', (req, res) => {
+  const db = getDB();
+  const templates = db.prepare('SELECT * FROM workflow_templates WHERE tenant_id = ? ORDER BY name').all(req.tenantId);
+  templates.forEach(t => { try { t.steps_json = JSON.parse(t.steps_json); } catch(e){} });
+  res.json({ templates });
+});
+
+adminRoutes.post('/workflow-templates', (req, res) => {
+  const db = getDB();
+  const { name, description, steps_json, is_active } = req.body;
+  if (!name || !steps_json) return res.status(400).json({ error: 'Name and steps are required' });
+  
+  const id = uuid();
+  const activeFlag = is_active === false ? 0 : 1;
+  db.prepare('INSERT INTO workflow_templates (id, tenant_id, name, description, steps_json, is_active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, name, description || '', JSON.stringify(steps_json), activeFlag, req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'WF Template Created', objectType: 'workflow_template', objectId: id, objectName: name, ip: req.ip });
+  res.status(201).json({ template: db.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(id) });
+});
+
+// ── USER DELEGATIONS ──────────────────────────────────────────────────
+adminRoutes.get('/delegations', (req, res) => {
+  const db = getDB();
+  const delegations = db.prepare(`
+    SELECT d.*, u1.name as delegator_name, u2.name as delegatee_name 
+    FROM user_delegations d 
+    JOIN users u1 ON d.delegator_id = u1.id 
+    JOIN users u2 ON d.delegatee_id = u2.id 
+    WHERE d.tenant_id = ? ORDER BY d.created_at DESC
+  `).all(req.tenantId);
+  res.json({ delegations });
+});
+
+adminRoutes.post('/delegations', (req, res) => {
+  const db = getDB();
+  const { delegator_id, delegatee_id, start_date, end_date } = req.body;
+  if (!delegator_id || !delegatee_id || !start_date) return res.status(400).json({ error: 'Delegator, delegatee, and start date required' });
+  
+  const id = uuid();
+  db.prepare('INSERT INTO user_delegations (id, tenant_id, delegator_id, delegatee_id, start_date, end_date) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, delegator_id, delegatee_id, start_date, end_date || null);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Delegation Created', objectType: 'user_delegation', objectId: id, ip: req.ip });
+  res.status(201).json({ message: 'Delegation created successfully' });
+});
+
 /**
  * Folders routes
  */
-export const folderRoutes = R();
+const folderRoutes = R();
 folderRoutes.use(requireAuth);
 
 folderRoutes.get('/', (req, res) => {
@@ -569,3 +686,294 @@ folderRoutes.get('/:id/inventory', (req, res) => {
   
   res.json({ inventory: { total: docCount, approved: approvedCount, pending: docCount - approvedCount } });
 });
+
+folderRoutes.patch('/:id/milestone', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { milestoneDate } = req.body;
+  // Assumes we alter folder_configs to have milestone_date, or use metadata JSON. We will add milestone_date column.
+  try { db.prepare('ALTER TABLE folder_configs ADD COLUMN milestone_date TEXT').run(); } catch(e){}
+  db.prepare('UPDATE folder_configs SET milestone_date = ? WHERE id = ? AND tenant_id = ?').run(milestoneDate || null, req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Milestone Updated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Milestone date updated' });
+});
+
+folderRoutes.get('/:id/export', (req, res) => {
+  const db = getDB();
+  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!folder) return res.status(404).json({ error: 'Folder not found' });
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Exported', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Folder export archive generated', downloadUrl: `/downloads/export-${folder.id}-${Date.now()}.zip` });
+});
+
+folderRoutes.get('/:id/tmf-index', (req, res) => {
+  const db = getDB();
+  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!folder) return res.status(404).json({ error: 'Folder not found' });
+  const [zone, section] = folder.path.split('/');
+  const docs = db.prepare('SELECT id, artifact_code, artifact_name, title, version, status, effective_date FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND tenant_id = ?').all(folder.study_id, zone, section || '', req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'TMF Index Generated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'TMF Index generated', index: docs });
+});
+
+// ── PLACEHOLDERS & FILE PLANS ────────────────────────────────────────
+folderRoutes.post('/placeholders', requireCap('canUpload'), (req, res) => {
+  const db = getDB();
+  const { study_id, folder_id, artifact_code, artifact_name, zone, section, expected_by_date, is_mandatory } = req.body;
+  if (!study_id || !artifact_code) return res.status(400).json({ error: 'study_id and artifact_code required' });
+  
+  const id = uuid();
+  db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, folder_id, artifact_code, artifact_name, zone, section, expected_by_date, is_mandatory, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, study_id, folder_id || null, artifact_code, artifact_name || '', zone || '', section || '', expected_by_date || null, is_mandatory === false ? 0 : 1, req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, studyId: study_id, userId: req.user.id, userName: req.user.name, action: 'Placeholder Created', objectType: 'placeholder', objectId: id, objectName: artifact_code, ip: req.ip });
+  res.status(201).json({ message: 'Placeholder created', id });
+});
+
+folderRoutes.patch('/placeholders/:id', requireCap('canUpload'), (req, res) => {
+  const db = getDB();
+  const { is_mandatory, na_designated, expected_by_date } = req.body;
+  const updates = []; const params = [];
+  if (is_mandatory !== undefined) { updates.push('is_mandatory = ?'); params.push(is_mandatory ? 1 : 0); }
+  if (na_designated !== undefined) { updates.push('na_designated = ?'); params.push(na_designated ? 1 : 0); }
+  if (expected_by_date !== undefined) { updates.push('expected_by_date = ?'); params.push(expected_by_date); }
+  
+  if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+  params.push(req.params.id, req.tenantId);
+  db.prepare(`UPDATE placeholders SET ${updates.join(', ')} WHERE id = ? AND tenant_id = ?`).run(...params);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Placeholder Updated', objectType: 'placeholder', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Placeholder updated' });
+});
+
+folderRoutes.delete('/placeholders/:id', requireCap('canUpload'), (req, res) => {
+  const db = getDB();
+  db.prepare('DELETE FROM placeholders WHERE id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Placeholder Removed', objectType: 'placeholder', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Placeholder removed' });
+});
+
+folderRoutes.post('/file-plans', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { study_id, plan_name, plan_json, milestone_date } = req.body;
+  if (!study_id || !plan_name || !plan_json) return res.status(400).json({ error: 'Required fields missing' });
+  const id = uuid();
+  db.prepare('INSERT INTO file_plans (id, tenant_id, study_id, plan_name, plan_json, milestone_date) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, study_id, plan_name, JSON.stringify(plan_json), milestone_date || null);
+  appendAudit({ tenantId: req.tenantId, studyId: study_id, userId: req.user.id, userName: req.user.name, action: 'File Plan Created', objectType: 'file_plan', objectId: id, ip: req.ip });
+  res.status(201).json({ message: 'File plan created', id });
+});
+
+folderRoutes.get('/file-plans/study/:studyId', (req, res) => {
+  const db = getDB();
+  const plans = db.prepare('SELECT * FROM file_plans WHERE study_id = ? AND tenant_id = ? ORDER BY created_at DESC').all(req.params.studyId, req.tenantId);
+  plans.forEach(p => { try { p.plan_json = JSON.parse(p.plan_json); } catch(e){} });
+  res.json({ file_plans: plans });
+});
+
+/**
+ * Queries (Quality Control) routes
+ */
+const qcRoutes = R();
+qcRoutes.use(requireAuth);
+
+qcRoutes.get('/', (req, res) => {
+  const db = getDB();
+  const { status, severity, documentType, dateRange } = req.query;
+  let q = `
+    SELECT q.*, d.name as document_name, d.status as document_status, d.type as document_type, d.folder_path,
+           u.name as created_by_name
+    FROM queries q
+    JOIN documents d ON q.document_id = d.id
+    JOIN users u ON q.created_by = u.id
+    WHERE q.tenant_id = ?
+  `;
+  const params = [req.tenantId];
+  
+  if (status) { q += ' AND q.status = ?'; params.push(status); }
+  if (severity) { q += ' AND q.severity = ?'; params.push(severity); }
+  if (documentType) { q += ' AND d.type = ?'; params.push(documentType); }
+  
+  q += ' ORDER BY q.created_at DESC';
+  const queries = db.prepare(q).all(...params);
+  
+  queries.forEach(query => {
+    try { query.responses = JSON.parse(query.responses || '[]'); } catch(e) { query.responses = []; }
+  });
+  
+  res.json({ queries });
+});
+
+qcRoutes.post('/', (req, res) => {
+  const db = getDB();
+  const { document_id, query_text, severity } = req.body;
+  if (!document_id || !query_text) return res.status(400).json({ error: 'document_id and query_text required' });
+  
+  const id = uuid();
+  const sev = severity || 'Medium';
+  db.prepare(`
+    INSERT INTO queries (id, tenant_id, document_id, query_text, status, severity, responses, created_by)
+    VALUES (?, ?, ?, ?, 'Open', ?, '[]', ?)
+  `).run(id, req.tenantId, document_id, query_text, sev, req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Query Opened', objectType: 'query', objectId: id, objectName: `Query on ${document_id}`, detail: `Severity: ${sev}`, ip: req.ip });
+  res.status(201).json({ message: 'Query created', id });
+});
+
+qcRoutes.patch('/:id', (req, res) => {
+  const db = getDB();
+  const { status, severity, audit_comments } = req.body;
+  const updates = {};
+  if (status) updates.status = status;
+  if (severity) updates.severity = severity;
+  if (audit_comments) updates.audit_comments = audit_comments;
+  
+  if (status === 'Closed') {
+    updates.resolved_at = new Date().toISOString();
+    updates.resolved_by = req.user.id;
+  }
+  
+  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
+  const set = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+  
+  const stmt = db.prepare(`UPDATE queries SET ${set} WHERE id = ? AND tenant_id = ?`);
+  stmt.run(...Object.values(updates), req.params.id, req.tenantId);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Query Updated', objectType: 'query', objectId: req.params.id, detail: JSON.stringify(updates), ip: req.ip });
+  res.json({ message: 'Query updated' });
+});
+
+qcRoutes.post('/:id/responses', (req, res) => {
+  const db = getDB();
+  const { response_text } = req.body;
+  if (!response_text) return res.status(400).json({ error: 'response_text required' });
+  
+  const query = db.prepare('SELECT responses FROM queries WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!query) return res.status(404).json({ error: 'Query not found' });
+  
+  let responses = [];
+  try { responses = JSON.parse(query.responses || '[]'); } catch(e) {}
+  
+  responses.push({
+    text: response_text,
+    user_id: req.user.id,
+    user_name: req.user.name,
+    timestamp: new Date().toISOString()
+  });
+  
+  db.prepare('UPDATE queries SET responses = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(responses), req.params.id, req.tenantId);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Query Response Added', objectType: 'query', objectId: req.params.id, detail: 'New response added', ip: req.ip });
+  res.json({ message: 'Response added', responses });
+});
+
+/**
+ * Studies / Trial Setup routes
+ */
+
+studyRoutes.get('/templates', (req, res) => {
+  const db = getDB();
+  const templates = db.prepare('SELECT * FROM trial_templates WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
+  res.json({ templates });
+});
+
+studyRoutes.post('/templates', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { name, description, version, is_active } = req.body;
+  if (!name) return res.status(400).json({ error: 'Template name required' });
+  const id = uuid();
+  const activeFlag = is_active === false ? 0 : 1;
+  db.prepare('INSERT INTO trial_templates (id, tenant_id, name, description, version, is_active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, name, description || '', version || '1.0', activeFlag, req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Trial Template Created', objectType: 'trial_template', objectId: id, objectName: name, ip: req.ip });
+  res.status(201).json({ template: db.prepare('SELECT * FROM trial_templates WHERE id = ?').get(id) });
+});
+
+studyRoutes.get('/templates/:id/model', (req, res) => {
+  const db = getDB();
+  const items = db.prepare('SELECT * FROM dia_model_items WHERE trial_template_id = ? AND tenant_id = ? ORDER BY zone, section, artifact').all(req.params.id, req.tenantId);
+  res.json({ dia_model: items });
+});
+
+studyRoutes.post('/templates/:id/model', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { items } = req.body; // Array of DIA items
+  if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Array of DIA items required' });
+  
+  // Clean existing model for this template and insert new exactly matching the UI builder
+  const tx = db.transaction((modelItems) => {
+    db.prepare('DELETE FROM dia_model_items WHERE trial_template_id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
+    
+    const ins = db.prepare(`
+      INSERT INTO dia_model_items (id, tenant_id, trial_template_id, zone, zone_name, section, section_name, artifact, artifact_name, level, is_mandatory, sponsor_overlay)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    modelItems.forEach(item => {
+      ins.run(
+        uuid(), req.tenantId, req.params.id,
+        item.zone, item.zone_name, item.section, item.section_name,
+        item.artifact, item.artifact_name, item.level || 'Trial',
+        item.is_mandatory ? 1 : 0, item.sponsor_overlay ? 1 : 0
+      );
+    });
+  });
+  
+  tx(items);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'DIA Model Updated', objectType: 'trial_template', objectId: req.params.id, detail: `Updated with ${items.length} items`, ip: req.ip });
+  res.json({ message: 'DIA Model successfully mapped to template' });
+});
+
+/**
+ * Forms & Logs routes
+ */
+const formRoutes = R();
+formRoutes.use(requireAuth);
+
+formRoutes.get('/schemas', (req, res) => {
+  const db = getDB();
+  const schemas = db.prepare('SELECT * FROM forms_schemas WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
+  // Parse schema_json
+  schemas.forEach(s => {
+    try { s.schema_json = JSON.parse(s.schema_json); } catch(e) {}
+  });
+  res.json({ schemas });
+});
+
+formRoutes.post('/schemas', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { name, description, schema_json, is_active } = req.body;
+  if (!name || !schema_json) return res.status(400).json({ error: 'Name and schema_json required' });
+  
+  const id = uuid();
+  const activeFlag = is_active === false ? 0 : 1;
+  db.prepare('INSERT INTO forms_schemas (id, tenant_id, name, description, schema_json, is_active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, name, description || '', JSON.stringify(schema_json), activeFlag, req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Form Schema Created', objectType: 'forms_schema', objectId: id, objectName: name, ip: req.ip });
+  res.status(201).json({ schema: db.prepare('SELECT * FROM forms_schemas WHERE id = ?').get(id) });
+});
+
+formRoutes.get('/:schemaId/data', (req, res) => {
+  const db = getDB();
+  const data = db.prepare('SELECT d.*, u.name as created_by_name FROM forms_data d JOIN users u ON d.created_by = u.id WHERE d.form_schema_id = ? AND d.tenant_id = ? ORDER BY d.created_at DESC').all(req.params.schemaId, req.tenantId);
+  // Parse data_json
+  data.forEach(d => {
+    try { d.data_json = JSON.parse(d.data_json); } catch(e) {}
+  });
+  res.json({ data });
+});
+
+formRoutes.post('/:schemaId/data', (req, res) => {
+  const db = getDB();
+  const { study_id, data_json } = req.body;
+  if (!data_json) return res.status(400).json({ error: 'data_json required' });
+  
+  const id = uuid();
+  db.prepare('INSERT INTO forms_data (id, tenant_id, form_schema_id, study_id, data_json, created_by) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, req.params.schemaId, study_id || null, JSON.stringify(data_json), req.user.id);
+  
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Form Data Submitted', objectType: 'forms_data', objectId: id, ip: req.ip });
+  res.status(201).json({ id, message: 'Form data submitted successfully' });
+});
+
+export { folderRoutes, qcRoutes, studyRoutes, formRoutes };

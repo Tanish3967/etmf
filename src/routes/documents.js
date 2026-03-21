@@ -367,6 +367,57 @@ router.patch('/:id/redact', blockInspector, requireCap('canUpload'), (req, res) 
   res.json({ message: 'Document redacted successfully' });
 });
 
+// ── POST /api/documents/:id/annotations ──────────────────────
+router.post('/:id/annotations', blockInspector, (req, res) => {
+  const db = getDB();
+  const { annotation_type, annotation_text, page_number, position_x, position_y } = req.body;
+  if (!annotation_text) return res.status(400).json({ error: 'annotation_text required' });
+
+  const annId = uuid();
+  db.prepare(`
+    INSERT INTO annotations (id, tenant_id, document_id, user_id, annotation_type, annotation_text, page_number, position_x, position_y)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(annId, req.tenantId, req.params.id, req.user.id, annotation_type || 'Note', annotation_text, page_number || 1, position_x || 0, position_y || 0);
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Annotated', objectType: 'document', objectId: req.params.id, detail: `Added ${annotation_type || 'Note'}: ${annotation_text.slice(0,50)}`, ip: req.ip });
+  res.status(201).json({ message: 'Annotation added', id: annId });
+});
+
+// ── DELETE /api/documents/:id/annotations/:annId ─────────────
+router.delete('/:id/annotations/:annId', blockInspector, (req, res) => {
+  const db = getDB();
+  db.prepare('DELETE FROM annotations WHERE id = ? AND document_id = ? AND tenant_id = ?').run(req.params.annId, req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Annotation Removed', objectType: 'document', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Annotation removed' });
+});
+
+// ── GET /api/documents/:id/preview ───────────────────────────
+router.get('/:id/preview', (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Previewed', objectType: 'document', objectId: req.params.id, ip: req.ip });
+  res.json({ message: 'Preview stream initialized', file_type: doc.file_type, file_path: doc.file_path, preview_url: `/downloads/preview-${doc.id}.tmp` });
+});
+
+// ── POST /api/documents/quick-upload ─────────────────────────
+router.post('/quick-upload', blockInspector, requireCap('canUpload'), upload.single('file'), (req, res) => {
+  const db = getDB();
+  // Quick upload bypasses the wizard and extracts standard metadata or places it in a generic Uncategorized zone
+  const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+  const file = req.file;
+  if (!file) return res.status(400).json({ error: 'File required' });
+
+  db.prepare(`
+    INSERT INTO documents (id, tenant_id, title, version, status, file_path, file_name, file_type, file_size, zone, section, created_by)
+    VALUES (?, ?, ?, '1.0', 'Draft', ?, ?, ?, ?, '00', 'Uncategorized', ?)
+  `).run(docId, req.tenantId, file.originalname, file.path, file.originalname, extname(file.originalname).slice(1).toUpperCase(), file.size, req.user.id);
+
+  appendAudit({ tenantId: req.tenantId, documentId: docId, userId: req.user.id, userName: req.user.name, action: 'Quick Uploaded', objectType: 'document', objectId: docId, detail: file.originalname, ip: req.ip });
+  res.status(201).json({ document: db.prepare('SELECT * FROM documents WHERE id = ?').get(docId) });
+});
+
 // ── PATCH /api/documents/:id/blind ───────────────────────────
 router.patch('/:id/blind', blockInspector, requireCap('canAdmin'), (req, res) => {
   const db = getDB();

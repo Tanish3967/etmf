@@ -30,6 +30,7 @@ import aiRoutes        from './routes/ai.js';
 import notifRoutes     from './routes/notifications.js';
 import adminRoutes     from './routes/admin.js';
 import folderRoutes    from './routes/folders.js';
+import { formRoutes, qcRoutes }  from './routes/all-routes.js';
 
 dotenv.config();
 
@@ -108,6 +109,8 @@ app.use('/api/ai',            aiRoutes);
 app.use('/api/notifications', notifRoutes);
 app.use('/api/admin',         adminRoutes);
 app.use('/api/folders',       folderRoutes);
+app.use('/api/forms',         formRoutes);
+app.use('/api/qc',            qcRoutes);
 
 // ── 404 ────────────────────────────────────────────────────
 app.use((req, res) => res.status(404).json({ error: 'Endpoint not found', path: req.path }));

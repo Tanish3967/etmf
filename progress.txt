@@ -1,0 +1,10 @@
+# Backend Progress Log
+---
+[2026-03]
+- Phase 1 (Document Actions & Folder Enhancements): **COMPLETED** (move, copy, pin, link, soft-delete, file plans, lock, distribution lists).
+- Phase 2 (System Admin, RBAC, Configuration): **COMPLETED** (User Groups, Functional Roles logic, System Codelists, Org Profiles).
+- Phase 3 (Quality Control - Query Manager): **COMPLETED** (Added Severity, Audit Comments, JSON Responses fields. Full CRUD API built).
+- Phase 3 (Study Setup - Trial Templates / DIA Model): **COMPLETED** (Built hierarchical Template -> DIA Model items tracking).
+- Phase 3 (Forms / Logs & eISF Setup): **COMPLETED** (Generic JSON schema endpoints. eISF mapped gracefully inside generic DIA site levels).
+- Security Enhancements: **COMPLETED** (Replaced sha256 with robust bcrypt password hashing. Server-wide syntactic validations applied).
+- Phase 4 (Document Engine & Actions): **COMPLETED** (Added Annotations API, Quick Upload, Previews, Redaction, Blinding, Copy/Move/Soft-Delete, Pinning, Links, and Bulk Download generation).

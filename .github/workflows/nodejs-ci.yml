@@ -1,0 +1,51 @@
+name: Node.js CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: Install Dependencies
+      run: npm ci || npm install
+      
+    - name: Syntactic Code Validation
+      # Verifies the ESM routing structure to prevent deployment of broken syntaxes
+      run: node -c src/server.js
+
+    - name: Run Tests
+      # If you add Jest or Mocha tests later, uncomment this line
+      # run: npm test
+      run: echo "No automated tests specified. Skipping test phase."
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      
+    # Example CD Steps:
+    # Customize the below to deploy to AWS, Azure, Heroku, or via SSH to your VPS.
+    - name: Deploy to Server (Placeholder)
+      run: |
+        echo "Successfully built branch main. Ready to trigger deployment script or webhook!"
+        # e.g., curl -X POST https://your-server.com/hooks/deploy-etmf
