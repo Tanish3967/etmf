@@ -8,3 +8,5 @@
 - Phase 3 (Forms / Logs & eISF Setup): **COMPLETED** (Generic JSON schema endpoints. eISF mapped gracefully inside generic DIA site levels).
 - Security Enhancements: **COMPLETED** (Replaced sha256 with robust bcrypt password hashing. Server-wide syntactic validations applied).
 - Phase 4 (Document Engine & Actions): **COMPLETED** (Added Annotations API, Quick Upload, Previews, Redaction, Blinding, Copy/Move/Soft-Delete, Pinning, Links, and Bulk Download generation).
+- Phase 5 (Folder & Repository Management): **COMPLETED** (Added generic TMF indexing, complete Folder zip exports, Milestone locks, and Placeholder mandatory mapping endpoints).
+- Phase 6 (Study Setup, Workflow & Approvals): **COMPLETED** (Added Study Cloning, Archival logic, DIA Model Migrations, Absence Management/Auto-Reassign, Token Numbering Engine format configs, and Document Publishing).

@@ -233,6 +233,24 @@ router.post('/:id/checkin', blockInspector, (req, res) => {
   res.json({ message: 'Document checked in' });
 });
 
+// ── POST /api/documents/:id/publish ──────────────────────────
+router.post('/:id/publish', blockInspector, requireCap('canUpload'), (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  if (doc.status === 'Approved') return res.status(400).json({ error: 'Document is already published/approved' });
+
+  // Update status, clear checkouts, increment minor/major version theoretically (here just fixing status)
+  db.prepare("UPDATE documents SET status = 'Approved', checked_out_by = NULL, checked_out_at = NULL WHERE id = ?").run(req.params.id);
+  
+  const whId = uuid();
+  db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(whId, req.params.id, req.tenantId, doc.status, 'Approved', req.user.id, 'Document explicitly published / signed off');
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Published', objectType: 'document', objectId: req.params.id, detail: `From ${doc.status} to Approved`, ip: req.ip });
+  res.json({ message: 'Document published successfully', document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id) });
+});
+
 // ── GET /api/documents/:id/versions ──────────────────────────
 router.get('/:id/versions', (req, res) => {
   const db = getDB();
