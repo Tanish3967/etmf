@@ -7,6 +7,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import speakeasy from 'speakeasy';
 import { v4 as uuid } from 'uuid';
+import { body, validationResult } from 'express-validator';
 import { getDB, appendAudit } from '../database.js';
 import { requireAuth, ROLE_CAPS } from '../middleware/auth.js';
 
@@ -16,9 +17,14 @@ const SESSION_HOURS = parseInt(process.env.SESSION_HOURS || '8');
 const MAX_FAILED = parseInt(process.env.MAX_LOGIN_ATTEMPTS || '5');
 
 // ── POST /api/auth/login ─────────────────────────────────────
-router.post('/login', async (req, res) => {
+router.post('/login', [
+  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('password').notEmpty().withMessage('Password required').trim()
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+
   const { email, password, mfaCode } = req.body;
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
 
   const db = getDB();
   const user = db.prepare('SELECT * FROM users WHERE email = ? AND active = 1').get(email.toLowerCase());

@@ -53,7 +53,7 @@ app.use(helmet({
 // ── CORS (tenant-aware) ────────────────────────────────────
 app.use(cors({
   origin: (origin, cb) => {
-    const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
+    const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5173,http://localhost:5174').split(',');
     if (!origin || allowed.includes(origin)) return cb(null, true);
     cb(new Error('CORS policy violation'));
   },

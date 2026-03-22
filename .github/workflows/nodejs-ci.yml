@@ -35,6 +35,24 @@ jobs:
       # run: npm test
       run: echo "No automated tests specified. Skipping test phase."
 
+  ai_security_review:
+    name: AI Code Reviewer (Security & Bugs)
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: AI Automated Bug & Security Review
+        uses: coderabbitai/coderabbit-action@v1
+        with:
+          # Automatically comments on PRs with security flaws and bug fixes
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          review-type: 'security_and_bugs'
+
   deploy:
     needs: build
     runs-on: ubuntu-latest

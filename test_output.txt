@@ -1,0 +1,21 @@
+--- STARTING eTMF BACKEND INTEGRATION TESTS ---
+
+[1] Testing Authentication Pipeline (POST /api/auth/login)...
+✅ Auth success! Received JWT Token.
+
+[2] Testing Core Document Retrieval (GET /api/documents)...
+✅ Retrieved 8 documents.
+
+[3] Testing Folder Placeholders (POST /api/folders/placeholders)...
+❌ Placeholder failed: 500 - {"error":"table placeholders has no column named folder_id","code":"SQLITE_ERROR"}
+
+[4] Testing Auto-Reassign execution (POST /api/admin/auto-reassign)...
+❌ Auto-reassign failed: 403 - {"error":"Your role (TMF Manager) does not have the 'canAdmin' capability","code":"FORBIDDEN","required":"canAdmin"}
+
+[5] Testing Timeliness / SLA Report (GET /api/reports/timeliness)...
+✅ SLA Report retrieved successfully (Phase 7). Avg Days: 0
+
+[6] Testing Metadata Redaction/Annotations (POST /api/documents/doc-001/annotations)...
+❌ Annotation failed: 400 - {"error":"annotation_text required"}
+
+--- ALL E2E INTEGRATION TESTS COMPLETED ---
