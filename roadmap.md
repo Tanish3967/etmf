@@ -1,142 +1,64 @@
-# eTMF Pro — Implementation Roadmap & Engineering Plan
-**Regulatory Standard:** ICH E6(R2) | 21 CFR Part 11 | EU Annex 11 | ALCOA+ | DIA TMF Ref Model v3.2  
-**Specification:** SRS-eTMF-COMBINED-001 (v4.0) | eTMF User Guide 4.3  
-**Current Baseline:** 56 Implemented | 32 Partial / Stub | 15 Missing (103 Tracked Features)
+# eTMF Pro 4.3 — Complete Functional Specification & Implementation Roadmap
+**Based on Clinevo Technologies Electronic Trial Master File Application User Guide v4.3 / 4.4 & SRS v4.0**  
+**Compliance Standards:** ICH E6(R2) | 21 CFR Part 11 | EU Annex 11 | ALCOA+ | DIA TMF Reference Model v3.2
 
 ---
 
-## Architecture Overview
+## 1. System Architecture & User Guide Mapping
 
-```mermaid
-flowchart TD
-    subgraph P1["Phase 1: Core Dedicated Workspaces"]
-        A1["Study Setup Wizard"]
-        A2["Integrations Center (CTMS/EDC/RTSM/ePRO)"]
-        A3["Forms & Logs Dynamic Builder"]
-        A4["eISF Site Scoped Module"]
-    end
-
-    subgraph P2["Phase 2: Repository & Document Lifecycle"]
-        B1["Folder Context Action Engine"]
-        B2["Document Action Modals (Diff, Redact, Blinding)"]
-        B3["Visual EDL & Completeness Matrix"]
-        B4["Interactive Sticky Notes & Annotation Layer"]
-    end
-
-    subgraph P3["Phase 3: Advanced Governance & Config"]
-        C1["Visual Workflow Template Designer"]
-        C2["Document Numbering Token Builder"]
-        C3["Inspection Readiness Pack & Simulator UI"]
-        C4["Delegations & Absence Auto-Reassignment"]
-    end
-
-    subgraph P4["Phase 4: GxP Validation & Quality Gates"]
-        D1["OQ/PQ Automated Test Suite"]
-        D2["Traceability Matrix & IQ/OQ Reports"]
-        D3["End-to-End Browser Verification"]
-    end
-
-    P1 --> P2 --> P3 --> P4
-```
+| User Guide Section | Module / Feature Name | Core Capabilities & UI Specifications | Status in Codebase |
+|---|---|---|---|
+| **§3 & §4** | **Login, Logout & Landing Page** | Enterprise ID, Email/Username, Password, First-time password change, Password complexity rules, Account lockout after `LOGIN_ATTEMPTS` (5 failed), Forgot Password temporary credential flow, Session timeout redirect. | ✅ Fully Implemented (`LoginScreen`, `auth.js`) |
+| **§6 & §7** | **Breadcrumbs & Grid Icons** | Dynamic location trail (`Repository > Study > Zone > Section > Artifact`), Grid collapse, expand, zoom in/out, and refresh icons. Back button folder navigation. | ✅ Implemented in `App.jsx` |
+| **§8.1** | **Header Toolbar** | Enterprise logo, Application name, Home shortcut, Notification center bell with badge counter, User profile avatar with role and timezone display, Logout button. | ✅ Implemented in `App.jsx` |
+| **§8.2 & §8.3** | **Task Grid & My Tasks Pane** | 3 Task Grid tabs: **Documents Tab** (Open, Pending Review, Approval, Signoff, Publish; SLA highlighting: Red = overdue after 2 reminders, Yellow = overdue after 1 reminder, Green = on track), **Expiry Documents Tab** (N-day horizon), **Queries Tab** (Open query tracker). | ✅ Core table built; Tabs & filter dropdowns in progress |
+| **§8.4** | **Document Search Bar** | 3 search modes: By Document ID, By Document Name (with `%` wildcards), By Document Display Name. Returns modal with Version, Status, Folder Path, and User Privilege. | ✅ Global search input built; Type selector modal in progress |
+| **§8.5.1** | **Security Administration** | **User Management** (§8.5.1.1: Add User, Add AD User, Reset Password, Assign Functional Role), **User Groups** (§8.5.1.2: Users tab with Author/Reviewer/Approver/Downloader/Blinded checkboxes; Folders tab with cascade privileges), **Functional Role Setup** (§8.5.1.3), **Functional Roles** (§8.5.1.4: 21 standard roles). | ✅ User table live; Functional role assigner & User Group folder matrix in progress |
+| **§8.5.2** | **Application Administration** | **Department Master** (§8.5.2.1), **Designation Master** (§8.5.2.2), **Document Type Master** (§8.5.2.3), **Document Classification** (§8.5.2.4: 3 levels, auto-publish, retention, digit length, cover page config), **Metadata Setup** (§8.5.2.5: up to 30 custom columns, date formats, display/download filename patterns), **Enable Debug** (§8.5.2.6), **Folder Structure** (§8.5.2.7: study/country/site templates, import/export structure, file plan), **Forms/Logs Setup** (§8.5.2.8: Sections Form/Grid, fields per line 1-4), **Remove Document** (§8.5.2.9), **Reason for Signature Template** (§8.5.2.10: Approver, Author, QA, Reviewer, Trainer reasons), **Schedule Inactive Doc Removal** (§8.5.2.11), **Schedule Reminder** (§8.5.2.12), **Workflow Manager** (§8.5.2.13: Reviewer, Approver, Signoff Levels 1-5, Publisher tabs with reminders & e-sig toggles). | ✅ API endpoints & dynamic tables ready; Dedicated builder modals in progress |
+| **§8.5.3** | **System Administration** | **Organization Profile** (§8.5.3.1: 32 configurable parameters including `ALLOW_PAST_EFFECTIVE_FROM_DATE`, `BLOB_FILE_EXTNS`, `DATE_FORMAT`, `REDACTION_ENABLED`, `WATERMARK_MESSAGE_FORMAT`, `LOGIN_ATTEMPTS`), **Register Database User** (§8.5.3.2: CTMS/DMS external interfaces), **System Codelists** (§8.5.3.3: approver/reviewer system scripts). | ✅ Codelists & profiles live in SQLite; Organization profile editor in progress |
+| **§8.6 & §8.7** | **Repository & Folder Context Menu** | Central file explorer, study creation with auto-imported DIA hierarchy, Sort/Filter (A-Z, Z-A, Latest/Old, Doc ID, Workflow, Doc Type). **Folder Right-Click Context Menu**: Assign User Group (§8.7.1), Revoke Privileges (§8.7.2), Lock (§8.7.3), Edit (§8.7.4), Distribution (§8.7.5), Additional Notification (§8.7.6), Export Documents (§8.7.7), Pin/Unpin (§8.7.8/9), Update Status (§8.7.10: Milestone actual/plan date update), Properties (§8.7.11), View History (§8.7.12). | ✅ Core Repository & Zone pills built; Folder right-click context menu in progress |
+| **§8.8** | **Folder Action Menu** | Action bar for folders: **File Plan** (§8.8.1: Doc count, mandatory flag, milestone status, QC required, workflow assignment, syncup & resync), **Milestone Due Date** (§8.8.2: Planned vs Actual dates), **Add Placeholder** (§8.8.3), **Add Document** (§8.8.4: Assign Authors, Reviewers, Approvers, Signoff users), **Copy Documents** (§8.8.5), **Move Documents** (§8.8.6), **View Inventory** (§8.8.7: Excel/PDF export, column chooser), **Bulk Download** (§8.8.8: Original vs rendition with watermark), **Index** (§8.8.9: upload/download index file). | ✅ Backend endpoints exist; Action bar modals in progress |
+| **§8.9 & §8.10** | **Document Context Menu (25 Actions)** | **Check-In/Out** (§8.10.2/6), **Blind/Unblind** (§8.10.3/12), **Properties** (§8.10.4), **Download Original & Download Rendition** (§8.10.5/10/19: with cover page, revision history, watermark, footer), **Document History** (§8.10.9), **Document View** (§8.10.11: in-system preview), **Inactivate / Soft Delete** (§8.10.13), **Redaction** (§8.10.14: blackout tool), **Copy/Move** (§8.10.15/16), **Quality Check** (§8.10.17), **Sticky Notes** (§8.10.18), **Link/Delink** (§8.10.20), **Access History** (§8.10.21), **Convert/Upload PDF** (§8.10.22), **Self-Assign / Release** (§8.10.24), **Raise Query** (§8.10.25). | ✅ Implemented in context menu; Visual modals being connected |
+| **§8.11** | **Placeholder Context Menu** | Add Document to Placeholder (§8.11.1), Set Optional / Set Mandatory (§8.11.2), Remove Placeholder (§8.11.3 with justification). | ✅ Backend complete; Placeholder context handler in progress |
+| **§8.12 & §8.13** | **Electronic Signatures & Versioning** | 21 CFR Part 11 compliant approval signature manifest on cover page (Signatory Name, Role, Date/Time UTC, Reason, Signature ID), immutable version history (Major.Minor). | ✅ Built in workflow engine & document viewer |
+| **§8.16** | **Dashboard / Curator** | Colored circular KPI rings: Total Documents, Completed Documents, In Progress Documents, In QC Documents, Missing Documents, Expected Documents. Clickable drilldown to Missing/Expected items with one-click placeholder removal. | ✅ Built on repository screen |
+| **§9 & §10** | **Quick View & Link Documents** | Quick View: side-by-side comparison of up to 2 documents or versions. Link Document: bi-directional relationship linking with "upgrade all to latest version" option. | ⚠️ Quick View side-by-side layout in progress |
+| **§11** | **Quality Control Module** | Audit Plan (create audit, assign participants, response tab with excel/pdf export), Monitor Audit Activities (track queries, auditor-auditee response loop). | ✅ Backend complete; UI tables live |
+| **§12** | **Forms/Logs Module** | Fill activated forms (e.g. Study Log, Site Log, DOA Log), add multiple section grid records, Lock form, Freeze form, Generate PDF report, Push generated report directly to eTMF folder. | ⚠️ Schema runner built; Push-to-folder workflow in progress |
+| **§13** | **Reports Suite (19 Reports)** | 1. Application Users, 2. Blinded/Unblinded, 3. Completeness (interactive pie charts & bar graphs), 4. Compliance, 5. Controlled Document Tracking (with Destroy button), 6. Document Copy Log, 7. Document Expiry, 8. Document Exports, 9. Document Workflows (Milestones & Missed Milestones), 10. Document Move Log, 11. Inactivate Documents, 12. Inventory (with Reviewer/Approver/Signoff checkboxes), 13. Folder History (5 tabs: Folder, User Group, File Plan, Milestone, Document), 14. Notes, 15. Quality (QC Completion Rate & Rejection Reason pie charts), 16. Queries, 17. Removed Documents, 18. Scheduled Jobs, 19. Timeliness (Overall Completion bar chart, Status pie chart, Expiration pie chart). | ✅ All 19 backend report engines ready; Interactive chart widgets in progress |
 
 ---
 
-## Phased Implementation Breakdown
+## 2. Step-by-Step Implementation Sprints
 
-### Phase 1: Core Dedicated Workspaces
-Focuses on the high-visibility missing modules identified in Section 1 of the audit:
+### Sprint 1: Interactive Document Context Modals (PDF §8.10)
+- **Objective**: Wire up the 25 document actions from user guide §8.10 to full rich modals instead of generic browser alerts:
+  1. `MetadataEditorModal`: Full form to view and edit metadata fields per §8.10.23.
+  2. `RedactionModal`: Visual redaction blackout tool on document preview with confirmation dialog per §8.10.14.
+  3. `StickyNotesModal`: Add, edit, and delete notes targeting Reviewers, Approvers, or Viewers per §8.10.18.
+  4. `BlindingModal`: Blind/Unblind toggle with audit justification per §8.10.3 and §8.10.12.
+  5. `RaiseQueryModal`: Formal query creation modal linked to document/placeholder per §8.10.25.
+  6. `LinkDocumentModal`: Multi-folder document selector with "Upgrade to latest version" action per §10.
 
-1. **Study Setup & Configuration Wizard**
-   - 4-step guided wizard: General Details (Protocol, Phase, Sponsor, Dates), Country & Regulatory Authority selection, Site Configuration with activation dates, and DIA Model version assignment with baseline summary.
-   - Automatic triggering of EDL placeholder generation upon study creation.
-   - Files: `frontend/src/components/study/StudyWizardModal.jsx`, `src/routes/studies.js`.
+### Sprint 2: Folder Action & Context Engine (PDF §8.7 & §8.8)
+- **Objective**: Right-click folder actions and folder toolbar action menu:
+  1. Right-click context menu on folders: **Assign User Group**, **Lock Study**, **Update Status (Milestones)**, **Folder Properties**, **View History**.
+  2. Folder Action Toolbar: **File Plan Manager** (view artifact expected counts, toggle mandatory, resync file plan), **Add Placeholder Modal**, **Bulk Download Modal** (with cover page, revision history, and watermark toggles per §8.8.8).
 
-2. **Enterprise Integrations Center**
-   - Unified status grid for CTMS, EDC, RTSM, ePRO, LMS, and RIM connectors.
-   - Real-time connection health indicators (green/amber/red), last sync timestamp, records processed, and failure alerts.
-   - On-demand "Sync Now" button triggering background synchronization.
-   - Files: `frontend/src/components/integrations/IntegrationsDashboard.jsx`, `src/routes/admin.js`.
+### Sprint 3: Study Setup & Workflow Administration (PDF §8.5.2 & §8.8.4)
+- **Objective**: Guided creation and configuration wizards:
+  1. **Study Setup Wizard**: Multi-step modal to create study, pick DIA taxonomy structure, select countries and sites, and auto-initialize EDL placeholders.
+  2. **Workflow Manager Modal** (§8.5.2.13): Tabs for Reviewer, Approver, Signoff Levels 1-5, and Publisher with reminder days and electronic signature requirements.
+  3. **Forms & Logs Interactive Workspace** (§12): Dynamic multi-section form renderer allowing users to add records, lock/freeze forms, and "Push to Folder".
 
-3. **Forms & Logs Interactive Workspace**
-   - Schema selector (Investigator Site Visit Log, Delegation of Authority, Deviation Form).
-   - Dynamic form renderer supporting date pickers, dropdowns, signatures, and file attachments.
-   - Tabular entry viewer with export to CSV/PDF.
-   - Files: `frontend/src/components/forms/FormsLogsWorkspace.jsx`, `src/routes/all-routes.js`.
+### Sprint 4: Reports Suite with Interactive Data Visualizations (PDF §13)
+- **Objective**: Complete graphical dashboards for the 19 standard reports:
+  1. **Completeness Report**: Interactive overall document status pie chart, In-progress/In-QC pie chart, and classification bar graph per §8.14.3.
+  2. **Timeliness Report**: Overall completion duration bar chart and status distribution chart per §8.14.19.
+  3. **Quality Report**: QC completion rate and rejection reason breakdown charts per §8.14.15.
+  4. **Folder History Multi-Tab Viewer**: 5 tabs (Folder, User Group, File Plan, Milestone, Document) per §8.14.13.
 
-4. **Electronic Investigator Site File (eISF)**
-   - Site-scoped view filtering documents exclusively to the logged-in user's site.
-   - Site readiness checklist and missing site document alerts.
-   - Files: `frontend/src/components/eisf/SitePortalView.jsx`.
-
----
-
-### Phase 2: Repository & Document Lifecycle
-Elevates document actions (§8.10) and folder actions (§8.7–8.8) from basic alerts to fully interactive workflows:
-
-1. **Complete Document Action Overlays**
-   - `VersionDiffModal.jsx`: Side-by-side text/PDF visual comparison highlighting differences between versions.
-   - `RedactionModal.jsx`: Visual blackout canvas tool updating the redacted asset and appending an audit record.
-   - `MetadataEditorModal.jsx`: Form allowing authorized roles to update document title, effective date, expiry, owner, and custom fields.
-   - `BlindingControlModal.jsx`: Role-gated blinding/unblinding with mandatory regulatory justification.
-   - `StickyNotesOverlay.jsx`: Pin interactive annotations and QA queries directly to pages on the Document Viewer.
-
-2. **Folder Context Action Engine**
-   - Right-click menu for DIA zones/sections: Folder Lock/Unlock, Milestone Due Date setting, Group permission assignment, Folder export, and Folder history log.
-   - Files: `frontend/src/components/repository/FolderContextMenu.jsx`, `src/routes/all-routes.js`.
-
-3. **Visual Expected Document List (EDL) Matrix**
-   - Heatmap/matrix display of Expected vs. Actual documents across Zone > Section > Artifact.
-   - One-click "Mark N/A" modal with mandatory 21 CFR Part 11 justification text.
-   - Export complete EDL to Excel/PDF.
-   - Files: `frontend/src/components/edl/EDLMatrixView.jsx`, `src/routes/edl.js`.
-
----
-
-### Phase 3: Advanced Governance & Configuration
-Fulfills SRS Sections 5, 8, 12, 14, and 19:
-
-1. **Visual Workflow Template Designer**
-   - Visual builder for multi-step workflows: Single-step, Two-step (Reviewer -> Approver), and Multi-approver parallel tracks.
-   - SLA duration configuration per step with escalation rules.
-   - Files: `frontend/src/components/admin/WorkflowTemplateDesigner.jsx`.
-
-2. **Document Numbering Token Builder**
-   - Token pills: `[STUDY]`, `[ZONE]`, `[ARTIFACT]`, `[COUNTRY]`, `[YEAR]`, `[COUNTER:0001]`.
-   - Drag-and-drop sequencing with real-time live preview (e.g. `TRIAL-01-TMF0101-US-2026-0001`).
-   - Files: `frontend/src/components/admin/NumberingTokenBuilder.jsx`.
-
-3. **Inspection Readiness Pack Builder & Q&A Simulator**
-   - Real-time Inspection Readiness Scorecard (0–100%).
-   - One-click Inspection Pack Generator (compiles selected zones/dates into an indexed zip/bundle).
-   - Interactive Inspector Q&A Simulator querying AI endpoints with document citation links.
-   - Files: `frontend/src/components/inspection/InspectionSimulator.jsx`, `src/routes/ai.js`.
-
-4. **Task Delegation & Absence Auto-Reassignment**
-   - Date-bounded delegation of review/approval tasks.
-   - Automatic task reassignment when user is set to Absent.
-   - Files: `frontend/src/components/admin/DelegationManager.jsx`.
-
----
-
-### Phase 4: GxP Validation, Verification & Quality Gate
-
-1. **OQ/PQ Automated Integration Suite**
-   - Verification of full 9-state lifecycle state machine transitions.
-   - E-signature re-authentication verification (21 CFR Part 11).
-   - Role-based isolation across all 7 personas.
-   - Audit trail immutability checks.
-
-2. **Validation Traceability Matrix (VTM)**
-   - Map all 103 requirements to automated test cases and manual verification procedures.
-
-3. **End-to-End Build & Run Verification**
-   - Clean production build: `npm run build`.
-   - Automated test suite execution: `npm test`.
-
----
-
-## Verification & Acceptance Criteria
-- **Zero Console/Network Errors**: All actions return valid JSON and appropriate HTTP status codes (200/201/204).
-- **ALCOA+ Audit Trail**: Every modification, deletion, blinding, or approval creates an immutable audit trail entry with user, role, IP, and timestamp.
-- **21 CFR Part 11 Compliance**: Password re-authentication required on approval; no unauthenticated signing.
-- **Cross-Browser Verification**: Verified across Chromium-based browsers, responsive layout with clean visual typography and zero layout shifts.
+### Sprint 5: Verification & GxP Compliance Package
+- Run full regression tests against 21 CFR Part 11 and ICH E6(R2) rules.
+- Test e-signature re-authentication, audit trail immutability, role isolation across all 7 personas.
+- Perform automated build and lint checks.
