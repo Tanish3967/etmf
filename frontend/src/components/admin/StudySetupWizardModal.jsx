@@ -128,6 +128,10 @@ export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated 
       setErrorMsg('Study Phase is required');
       return false;
     }
+    if (protocolData.startDate && protocolData.plannedEndDate && protocolData.plannedEndDate < protocolData.startDate) {
+      setErrorMsg('Planned End Date cannot be earlier than Study Start Date');
+      return false;
+    }
     setErrorMsg('');
     return true;
   };
@@ -575,8 +579,8 @@ export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated 
                       <input
                         type="checkbox"
                         checked={isChecked}
-                        onChange={() => {}} // handled by div click
-                        style={{ marginTop: 3 }}
+                        readOnly
+                        style={{ marginTop: 3, pointerEvents: 'none' }}
                       />
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

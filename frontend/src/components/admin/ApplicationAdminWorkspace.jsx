@@ -110,6 +110,23 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
     }
   };
 
+  const handleDeleteSiteFromStudy = async (site) => {
+    if (!sitesModal) return;
+    if (sitesModal.study.locked) {
+      showNotification('Cannot delete sites: Study is locked per 21 CFR Part 11', true);
+      return;
+    }
+    if (!window.confirm(`Regulatory Action: Remove site "${site.site_code} (${site.name})"?`)) return;
+    try {
+      await api.delete(`/studies/${sitesModal.study.id}/sites/${site.id}`);
+      showNotification(`Site "${site.site_code}" removed.`);
+      setSitesModal({ ...sitesModal, sites: sitesModal.sites.filter(s => s.id !== site.id) });
+      fetchStudies();
+    } catch (err) {
+      showNotification(err.response?.data?.error || 'Failed to remove site', true);
+    }
+  };
+
   const handleLockStudy = async (study) => {
     if (!window.confirm(`Regulatory Lock Action: Are you sure you want to lock study "${study.protocol_number}" per 21 CFR Part 11 requirements? Locked studies cannot receive modifications.`)) return;
     try {
@@ -118,6 +135,17 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
       fetchStudies();
     } catch (err) {
       showNotification(err.response?.data?.error || 'Failed to lock study', true);
+    }
+  };
+
+  const handleUnlockStudy = async (study) => {
+    if (!window.confirm(`Regulatory Unlock Action: Unlock study "${study.protocol_number}"? This will re-enable active filings and site operations.`)) return;
+    try {
+      await api.post(`/studies/${study.id}/unlock`);
+      showNotification(`Study "${study.protocol_number}" has been unlocked.`);
+      fetchStudies();
+    } catch (err) {
+      showNotification(err.response?.data?.error || 'Failed to unlock study', true);
     }
   };
 
@@ -242,6 +270,7 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
 
   // ── FILTERS ────────────────────────────────────────────────────────
   const filteredStudies = studies.filter(s => {
+    if (!studySearch.trim()) return true;
     const q = studySearch.toLowerCase();
     return (s.protocol_number && s.protocol_number.toLowerCase().includes(q)) ||
            (s.title && s.title.toLowerCase().includes(q)) ||
@@ -249,12 +278,14 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
   });
 
   const filteredDepts = departments.filter(d => {
+    if (!deptSearch.trim()) return true;
     const q = deptSearch.toLowerCase();
     return (d.name && d.name.toLowerCase().includes(q)) ||
            (d.code && d.code.toLowerCase().includes(q));
   });
 
   const filteredDesigs = designations.filter(d => {
+    if (!desigSearch.trim()) return true;
     const q = desigSearch.toLowerCase();
     return (d.name && d.name.toLowerCase().includes(q)) ||
            (d.code && d.code.toLowerCase().includes(q));
@@ -483,7 +514,16 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
                           >
                             📑 Clone
                           </button>
-                          {s.status !== 'Locked' && (
+                          {s.status === 'Locked' ? (
+                            <button
+                              onClick={() => handleUnlockStudy(s)}
+                              className="btn-secondary"
+                              style={{ padding: '4px 8px', fontSize: 11, color: '#16a34a', borderColor: '#bbf7d0' }}
+                              title="Regulatory Unlock (21 CFR Part 11)"
+                            >
+                              🔓 Unlock
+                            </button>
+                          ) : (
                             <button
                               onClick={() => handleLockStudy(s)}
                               className="btn-secondary"
@@ -867,6 +907,7 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
                     <th>Country</th>
                     <th>PI Name</th>
                     <th>Activation</th>
+                    <th style={{ textAlign: 'right' }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -878,11 +919,22 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
                         <td>{s.country}</td>
                         <td>{s.pi_name || '—'}</td>
                         <td>{s.activation_date || '—'}</td>
+                        <td style={{ textAlign: 'right' }}>
+                          {!sitesModal.study.locked && (
+                            <button
+                              onClick={() => handleDeleteSiteFromStudy(s)}
+                              style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                              title="Remove site from study"
+                            >
+                              ✕ Remove
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="5" style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
+                      <td colSpan="6" style={{ textAlign: 'center', padding: 24, color: '#94a3b8' }}>
                         No sites assigned to this study.
                       </td>
                     </tr>

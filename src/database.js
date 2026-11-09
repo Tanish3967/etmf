@@ -225,22 +225,26 @@ export async function initDB() {
 
     -- ── PLACEHOLDERS (EDL) ───────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS placeholders (
-      id            TEXT PRIMARY KEY,
-      tenant_id     TEXT NOT NULL,
-      study_id      TEXT NOT NULL REFERENCES studies(id),
-      artifact_code TEXT NOT NULL,
-      artifact_name TEXT NOT NULL,
-      zone          TEXT NOT NULL,
-      zone_label    TEXT,
-      section       TEXT NOT NULL,
-      section_label TEXT,
-      mandatory     INTEGER DEFAULT 1,
-      expected_by   TEXT,
-      na_designated INTEGER DEFAULT 0,
-      na_reason     TEXT,
-      na_by         TEXT REFERENCES users(id),
-      na_at         TEXT,
-      created_at    TEXT DEFAULT (datetime('now')),
+      id               TEXT PRIMARY KEY,
+      tenant_id        TEXT NOT NULL,
+      study_id         TEXT NOT NULL REFERENCES studies(id),
+      folder_id        TEXT REFERENCES folder_configs(id),
+      artifact_code    TEXT NOT NULL,
+      artifact_name    TEXT NOT NULL,
+      zone             TEXT NOT NULL,
+      zone_label       TEXT,
+      section          TEXT NOT NULL,
+      section_label    TEXT,
+      mandatory        INTEGER DEFAULT 1,
+      is_mandatory     INTEGER DEFAULT 1,
+      expected_by      TEXT,
+      expected_by_date TEXT,
+      na_designated    INTEGER DEFAULT 0,
+      na_reason        TEXT,
+      na_by            TEXT REFERENCES users(id),
+      na_at            TEXT,
+      created_at       TEXT DEFAULT (datetime('now')),
+      created_by       TEXT,
       UNIQUE(study_id, artifact_code)
     );
 
@@ -471,23 +475,6 @@ export async function initDB() {
       created_at       TEXT DEFAULT (datetime('now'))
     );
 
-    -- ── REPOSITORY & PLACEHOLDERS ────────────────────────────────────
-    CREATE TABLE IF NOT EXISTS placeholders (
-      id               TEXT PRIMARY KEY,
-      tenant_id        TEXT NOT NULL,
-      study_id         TEXT NOT NULL REFERENCES studies(id),
-      folder_id        TEXT REFERENCES folder_configs(id),
-      artifact_code    TEXT NOT NULL,
-      artifact_name    TEXT NOT NULL,
-      zone             TEXT,
-      section          TEXT,
-      expected_by_date TEXT,
-      is_mandatory     INTEGER DEFAULT 1,
-      na_designated    INTEGER DEFAULT 0,
-      created_at       TEXT DEFAULT (datetime('now')),
-      created_by       TEXT
-    );
-
     CREATE TABLE IF NOT EXISTS file_plans (
       id               TEXT PRIMARY KEY,
       tenant_id        TEXT NOT NULL,
@@ -509,6 +496,7 @@ export async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_queries_status  ON queries(status, tenant_id);
     CREATE INDEX IF NOT EXISTS idx_notifs_user     ON notifications(user_id, read);
     CREATE INDEX IF NOT EXISTS idx_wf_doc          ON workflow_history(document_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_study_code ON sites(study_id, site_code, tenant_id);
     -- ── MIGRATIONS (Safe column additions) ───────────────────────────
   `);
 
@@ -541,6 +529,18 @@ export async function initDB() {
   // Phase 5: Security & Application Administration Enhancements (§8.5)
   addColumn('user_groups', 'privileges', "TEXT DEFAULT '[]'");
   addColumn('user_groups', 'folder_assignments', "TEXT DEFAULT '[]'");
+  addColumn('studies', 'countries', "TEXT DEFAULT '[]'");
+  addColumn('placeholders', 'folder_id', 'TEXT REFERENCES folder_configs(id)');
+  addColumn('placeholders', 'zone_label', 'TEXT');
+  addColumn('placeholders', 'section_label', 'TEXT');
+  addColumn('placeholders', 'mandatory', 'INTEGER DEFAULT 1');
+  addColumn('placeholders', 'is_mandatory', 'INTEGER DEFAULT 1');
+  addColumn('placeholders', 'expected_by', 'TEXT');
+  addColumn('placeholders', 'expected_by_date', 'TEXT');
+  addColumn('placeholders', 'created_by', 'TEXT');
+  addColumn('placeholders', 'na_reason', 'TEXT');
+  addColumn('placeholders', 'na_by', 'TEXT');
+  addColumn('placeholders', 'na_at', 'TEXT');
 
   await seedClinicalForms();
   await seedDemoData();

@@ -271,6 +271,129 @@ async function runTests() {
     assert(res.body.site.site_code === 'Site-004', 'Site code mismatch');
   });
 
+  await test('POST /api/studies/:id/lock locks study and blocks site addition', async () => {
+    assert(createdStudyId, 'No created study ID');
+    const res = await req('POST', `/api/studies/${createdStudyId}/lock`, { force: true }, token);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+
+    // Attempt to add site to locked study should fail with 400
+    const addSiteRes = await req('POST', `/api/studies/${createdStudyId}/sites`, {
+      siteCode: 'Site-999',
+      name: 'Blocked Site',
+      country: 'USA'
+    }, token);
+    assert(addSiteRes.status === 400, `Expected 400 when adding site to locked study, got ${addSiteRes.status}`);
+  });
+
+  await test('POST /api/studies/:id/unlock unlocks study and re-enables site additions', async () => {
+    assert(createdStudyId, 'No created study ID');
+    const res = await req('POST', `/api/studies/${createdStudyId}/unlock`, {}, token);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+
+    // Adding site should now succeed
+    const addSiteRes = await req('POST', `/api/studies/${createdStudyId}/sites`, {
+      siteCode: 'Site-005',
+      name: 'Unlocked Hospital Site',
+      country: 'USA'
+    }, token);
+    assert(addSiteRes.status === 201, `Expected 201 when adding site to unlocked study, got ${addSiteRes.status}`);
+  });
+
+  let siteToDeleteId = null;
+  await test('DELETE /api/studies/:id/sites/:siteId removes a site from study', async () => {
+    assert(createdStudyId, 'No created study ID');
+    const sitesRes = await req('GET', `/api/studies/${createdStudyId}/sites`, null, token);
+    const site5 = sitesRes.body.sites.find(s => s.site_code === 'Site-005');
+    assert(site5, 'Site-005 not found');
+    siteToDeleteId = site5.id;
+
+    const delRes = await req('DELETE', `/api/studies/${createdStudyId}/sites/${siteToDeleteId}`, null, token);
+    assert(delRes.status === 200, `Expected 200, got ${delRes.status}`);
+
+    const verifySites = await req('GET', `/api/studies/${createdStudyId}/sites`, null, token);
+    assert(!verifySites.body.sites.some(s => s.id === siteToDeleteId), 'Site was not deleted');
+  });
+
+  let clonedStudyId = null;
+  await test('POST /api/studies/:id/clone clones study hierarchy with placeholders and sites', async () => {
+    assert(createdStudyId, 'No created study ID');
+    const clonePayload = {
+      newProtocolNumber: `CLONE-${Date.now()}`,
+      newTitle: 'Cloned Multicenter Study for Extension'
+    };
+    const res = await req('POST', `/api/studies/${createdStudyId}/clone`, clonePayload, token);
+    assert(res.status === 201, `Expected 201, got ${res.status}: ${JSON.stringify(res.body)}`);
+    assert(res.body.study && res.body.study.id, 'Cloned study not returned');
+    assert(res.body.placeholdersCloned >= 25, `Expected >= 25 placeholders cloned, got ${res.body.placeholdersCloned}`);
+    assert(res.body.sitesCloned >= 3, `Expected >= 3 sites cloned, got ${res.body.sitesCloned}`);
+    clonedStudyId = res.body.study.id;
+
+    // Verify duplicate protocol clone fails with 409
+    const dupRes = await req('POST', `/api/studies/${createdStudyId}/clone`, clonePayload, token);
+    assert(dupRes.status === 409, `Expected 409 for duplicate clone, got ${dupRes.status}`);
+  });
+
+  let customRoleId = null;
+  await test('POST /api/admin/functional-roles creates custom role and DELETE deletes it', async () => {
+    const roleRes = await req('POST', '/api/admin/functional-roles', {
+      name: `Specialist Auditor ${Date.now()}`,
+      description: 'Custom regulatory compliance role',
+      capabilities: ['canView', 'canReview']
+    }, token);
+    assert(roleRes.status === 201, `Expected 201, got ${roleRes.status}`);
+    customRoleId = roleRes.body.role.id;
+
+    // Duplicate role name should return 409
+    const dupRole = await req('POST', '/api/admin/functional-roles', {
+      name: roleRes.body.role.name,
+      description: 'Duplicate role'
+    }, token);
+    assert(dupRole.status === 409, `Expected 409 for duplicate role name, got ${dupRole.status}`);
+
+    // Attempt to delete standard role (frole-001) must fail with 403
+    const stdDelRes = await req('DELETE', '/api/admin/functional-roles/frole-001', null, token);
+    assert(stdDelRes.status === 403, `Expected 403 when deleting standard role, got ${stdDelRes.status}`);
+
+    // Delete custom role should succeed
+    const delRes = await req('DELETE', `/api/admin/functional-roles/${customRoleId}`, null, token);
+    assert(delRes.status === 200, `Expected 200, got ${delRes.status}`);
+  });
+
+  let zeroZoneStudyId = null;
+  await test('POST /api/studies with empty zones [] creates 0 placeholders', async () => {
+    const res = await req('POST', '/api/studies', {
+      protocolNumber: `ZERO-ZONES-${Date.now()}`,
+      title: 'Study with no initial placeholders',
+      phase: 'Phase I',
+      initializeEDL: true,
+      zones: []
+    }, token);
+    assert(res.status === 201, `Expected 201, got ${res.status}`);
+    assert(res.body.placeholdersCount === 0, `Expected 0 placeholders, got ${res.body.placeholdersCount}`);
+    zeroZoneStudyId = res.body.study.id;
+  });
+
+  let unicodeStudyId = null;
+  await test('POST /api/studies handles Unicode characters in protocol, title, countries, sites', async () => {
+    const res = await req('POST', '/api/studies', {
+      protocolNumber: `UNI-STUDY-β-${Date.now()}`,
+      title: 'Klinische Studie Phase-III: Prüfsubstanz β-12 für Onkologie',
+      phase: 'Phase III',
+      therapeuticArea: 'Oncology / 腫瘍学',
+      sponsorName: 'BioPharma AG & Co. KGaA',
+      countries: ['Deutschland', 'Österreich', '日本'],
+      sites: [
+        { siteCode: 'Site-DE-01', name: 'Charité – Universitätsmedizin Berlin', country: 'Deutschland', piName: 'Prof. Dr. Müller' },
+        { siteCode: 'Site-JP-01', name: '東京大学医学部附属病院', country: '日本', piName: '佐藤 健治 先生' }
+      ],
+      initializeEDL: false
+    }, token);
+    assert(res.status === 201, `Expected 201, got ${res.status}`);
+    assert(res.body.study.title.includes('Prüfsubstanz β-12'), 'Unicode title mismatch');
+    assert(res.body.study.countries.includes('日本'), 'Unicode country mismatch');
+    unicodeStudyId = res.body.study.id;
+  });
+
   // ── 5. DEPARTMENT & DESIGNATION MASTERS (§8.5.2.1 & §8.5.2.2) ──────
   console.log('\n🏢 Department & Designation Masters (§8.5.2.1 & §8.5.2.2)');
 
@@ -282,7 +405,7 @@ async function runTests() {
     assert(res.body.codelists.length >= 7, 'Expected seeded departments');
   });
 
-  await test('POST /api/admin/system-codelists creates a new Department', async () => {
+  await test('POST /api/admin/system-codelists creates a new Department & rejects duplicates', async () => {
     const deptCode = `DEPT-AUTO-${Date.now()}`;
     const res = await req('POST', '/api/admin/system-codelists', {
       code: deptCode,
@@ -293,6 +416,14 @@ async function runTests() {
     assert(res.status === 201, `Expected 201, got ${res.status}`);
     assert(res.body.codelist.code === deptCode, 'Code mismatch');
     createdDeptId = res.body.codelist.id;
+
+    // Verify duplicate code rejected with 409
+    const dupRes = await req('POST', '/api/admin/system-codelists', {
+      code: deptCode,
+      name: 'Duplicate Dept',
+      group_name: 'Department'
+    }, token);
+    assert(dupRes.status === 409, `Expected 409 for duplicate codelist, got ${dupRes.status}`);
   });
 
   await test('DELETE /api/admin/system-codelists/:id deletes department', async () => {
@@ -328,17 +459,18 @@ async function runTests() {
     assert(res.status === 200, `Expected 200, got ${res.status}`);
   });
 
-  // Teardown created test user and test study so standard test suites remain 100% clean
+  // Teardown created test user and test studies so standard test suites remain 100% clean
   const db = getDB();
   if (createdUserId) {
     db.prepare('DELETE FROM user_functional_roles WHERE user_id = ?').run(createdUserId);
     db.prepare('DELETE FROM users WHERE id = ?').run(createdUserId);
   }
-  if (createdStudyId) {
-    db.prepare('DELETE FROM placeholders WHERE study_id = ?').run(createdStudyId);
-    db.prepare('DELETE FROM sites WHERE study_id = ?').run(createdStudyId);
-    db.prepare('DELETE FROM studies WHERE id = ?').run(createdStudyId);
-  }
+  const studyIdsToClean = [createdStudyId, clonedStudyId, zeroZoneStudyId, unicodeStudyId].filter(Boolean);
+  studyIdsToClean.forEach(sid => {
+    db.prepare('DELETE FROM placeholders WHERE study_id = ?').run(sid);
+    db.prepare('DELETE FROM sites WHERE study_id = ?').run(sid);
+    db.prepare('DELETE FROM studies WHERE id = ?').run(sid);
+  });
 
   console.log('\n──────────────────────────────────────────────────────');
   console.log(`Results: ${passed} passed, ${failed} failed (${Math.round((passed / (passed + failed)) * 100)}%)`);

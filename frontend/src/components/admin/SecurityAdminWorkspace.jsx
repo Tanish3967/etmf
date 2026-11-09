@@ -377,27 +377,45 @@ export default function SecurityAdminWorkspace() {
     }
   };
 
+  const handleDeleteRole = async (r) => {
+    if (r.id.startsWith('frole-')) {
+      alert('Standard GCP clinical functional roles cannot be deleted.');
+      return;
+    }
+    if (!window.confirm(`Regulatory Action: Delete custom clinical functional role "${r.name}"? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/admin/functional-roles/${r.id}`);
+      showNotification(`Functional role "${r.name}" deleted.`);
+      fetchFunctionalRoles();
+    } catch (err) {
+      showNotification(err.response?.data?.error || 'Failed to delete role', true);
+    }
+  };
+
   // ── FILTERS ────────────────────────────────────────────────────────
   const uniqueDepts = ['All', ...new Set([...users.map(u => u.dept), ...availableDepts.map(d => d.name)].filter(Boolean))];
   const uniqueRoles = ['All', ...new Set(users.map(u => u.role).filter(Boolean))];
 
   const filteredUsers = users.filter(u => {
+    const matchDept = selectedDeptFilter === 'All' || u.dept === selectedDeptFilter;
+    const matchRole = selectedRoleFilter === 'All' || u.role === selectedRoleFilter;
+    if (!userSearch.trim()) return matchDept && matchRole;
     const q = userSearch.toLowerCase();
     const matchSearch = (u.name && u.name.toLowerCase().includes(q)) ||
                         (u.email && u.email.toLowerCase().includes(q)) ||
                         (u.designation && u.designation.toLowerCase().includes(q));
-    const matchDept = selectedDeptFilter === 'All' || u.dept === selectedDeptFilter;
-    const matchRole = selectedRoleFilter === 'All' || u.role === selectedRoleFilter;
     return matchSearch && matchDept && matchRole;
   });
 
   const filteredGroups = userGroups.filter(g => {
+    if (!groupSearch.trim()) return true;
     const q = groupSearch.toLowerCase();
     return (g.name && g.name.toLowerCase().includes(q)) ||
            (g.description && g.description.toLowerCase().includes(q));
   });
 
   const filteredFunctionalRoles = functionalRoles.filter(r => {
+    if (!roleSearch.trim()) return true;
     const q = roleSearch.toLowerCase();
     return (r.name && r.name.toLowerCase().includes(q)) ||
            (r.description && r.description.toLowerCase().includes(q));
@@ -871,6 +889,16 @@ export default function SecurityAdminWorkspace() {
                           >
                             ✏️ Edit
                           </button>
+                          {!r.id.startsWith('frole-') && (
+                            <button
+                              onClick={() => handleDeleteRole(r)}
+                              className="btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: 12, color: '#dc2626' }}
+                              title="Delete Custom Role"
+                            >
+                              🗑️ Delete
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

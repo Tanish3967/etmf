@@ -130,7 +130,11 @@ userRoutes.patch('/:id', requireCap('canAdmin'), async (req, res) => {
   const db = getDB();
   const { role, dept, active, name, email, designation, description, functional_roles } = req.body;
   const updates = {}; const user = db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (email && email !== user.email) {
+    const existing = db.prepare('SELECT id FROM users WHERE tenant_id = ? AND email = ? AND id != ?').get(req.tenantId, email, req.params.id);
+    if (existing) return res.status(409).json({ error: `User with email ${email} already exists` });
+  }
+
   if (role !== undefined) updates.role = role;
   if (dept !== undefined) updates.dept = dept;
   if (active !== undefined) updates.active = active ? 1 : 0;
@@ -177,22 +181,26 @@ studyRoutes.use(requireAuth);
 studyRoutes.get('/', (req, res) => {
   const db = getDB();
   const studies = db.prepare('SELECT s.*, (SELECT COUNT(*) FROM documents d WHERE d.study_id = s.id) as doc_count, (SELECT COUNT(*) FROM sites si WHERE si.study_id = s.id) as site_count FROM studies s WHERE s.tenant_id = ? ORDER BY s.created_at DESC').all(req.tenantId);
+  studies.forEach(s => {
+    try { s.countries = JSON.parse(s.countries || '[]'); } catch(e) { s.countries = []; }
+  });
   res.json({ studies });
 });
 
 studyRoutes.post('/', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
-  const { protocolNumber, title, phase, therapeuticArea, sponsorName, croName, startDate, plannedEndDate, tmfModelVersion = 'DIA v3.2', sites = [], initializeEDL = false, zones = [] } = req.body;
+  const { protocolNumber, title, phase, therapeuticArea, sponsorName, croName, startDate, plannedEndDate, tmfModelVersion = 'DIA v3.2', status = 'Active', countries = [], sites = [], initializeEDL = false, zones } = req.body;
   if (!protocolNumber || !title || !phase) return res.status(400).json({ error: 'protocolNumber, title, phase required' });
   const existing = db.prepare('SELECT id FROM studies WHERE tenant_id = ? AND protocol_number = ?').get(req.tenantId, protocolNumber);
   if (existing) return res.status(409).json({ error: `Study ${protocolNumber} already exists` });
   const id = `study-${Date.now()}`;
-  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,start_date,planned_end_date,tmf_model_version,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, req.tenantId, protocolNumber, title, phase, therapeuticArea || '', sponsorName || '', croName || '', startDate || null, plannedEndDate || null, tmfModelVersion, 'Setup', req.user.id);
+  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,start_date,planned_end_date,tmf_model_version,status,countries,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.tenantId, protocolNumber, title, phase, therapeuticArea || '', sponsorName || '', croName || '', startDate || null, plannedEndDate || null, tmfModelVersion, status || 'Active', JSON.stringify(countries || []), req.user.id);
   
   // Auto-initialize Participating Sites if provided
   let siteCount = 0;
   if (Array.isArray(sites) && sites.length > 0) {
-    const insSite = db.prepare('INSERT INTO sites (id, tenant_id, study_id, site_code, name, country, pi_name, status, activation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insSite = db.prepare('INSERT OR IGNORE INTO sites (id, tenant_id, study_id, site_code, name, country, pi_name, status, activation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     sites.forEach((s, idx) => {
       const siteId = `site-${Date.now()}-${idx + 1}`;
       const code = s.siteCode || s.site_code || s.code || `Site-${String(idx + 1).padStart(3, '0')}`;
@@ -237,20 +245,22 @@ studyRoutes.post('/', requireCap('canAdmin'), (req, res) => {
       { code: '11.02.01', name: 'Blind Data Review Meeting Minutes', zone: '11', zoneLabel: 'Statistics', section: '11.02', sectionLabel: 'Data Blind Review' }
     ];
 
-    const selectedZoneCodes = Array.isArray(zones) && zones.length > 0 ? zones : null;
-    const itemsToInsert = selectedZoneCodes 
+    const selectedZoneCodes = Array.isArray(zones) ? zones : null;
+    const itemsToInsert = selectedZoneCodes !== null 
       ? DIA_STANDARD_PLACEHOLDERS.filter(p => selectedZoneCodes.includes(p.zone)) 
       : DIA_STANDARD_PLACEHOLDERS;
 
-    const insPH = db.prepare('INSERT OR IGNORE INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, mandatory, expected_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)');
+    const insPH = db.prepare('INSERT OR IGNORE INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, mandatory, is_mandatory, expected_by, expected_by_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)');
     itemsToInsert.forEach(item => {
-      insPH.run(uuid(), req.tenantId, id, item.code, item.name, item.zone, item.zoneLabel, item.section, item.sectionLabel, plannedEndDate || null);
+      insPH.run(uuid(), req.tenantId, id, item.code, item.name, item.zone, item.zoneLabel, item.section, item.sectionLabel, plannedEndDate || null, plannedEndDate || null);
       placeholderCount++;
     });
   }
 
   appendAudit({ tenantId: req.tenantId, studyId: id, userId: req.user.id, userName: req.user.name, action: 'Study Created', objectType: 'study', objectId: id, objectName: title, detail: `Created with ${siteCount} sites, ${placeholderCount} EDL placeholders`, ip: req.ip });
-  res.status(201).json({ study: db.prepare('SELECT * FROM studies WHERE id = ?').get(id), sitesCount: siteCount, placeholdersCount: placeholderCount });
+  const study = db.prepare('SELECT * FROM studies WHERE id = ?').get(id);
+  try { study.countries = JSON.parse(study.countries || '[]'); } catch(e) { study.countries = []; }
+  res.status(201).json({ study, sitesCount: siteCount, placeholdersCount: placeholderCount });
 });
 
 studyRoutes.get('/:id/sites', (req, res) => {
@@ -281,6 +291,25 @@ studyRoutes.post('/:id/sites', requireCap('canAdmin'), (req, res) => {
   res.status(201).json({ site: db.prepare('SELECT * FROM sites WHERE id = ?').get(id) });
 });
 
+studyRoutes.delete('/:id/sites/:siteId', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const study = db.prepare('SELECT * FROM studies WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!study) return res.status(404).json({ error: 'Study not found' });
+  if (study.locked) return res.status(400).json({ error: 'Study is locked. Cannot modify sites of a locked clinical study.' });
+  const site = db.prepare('SELECT * FROM sites WHERE id = ? AND study_id = ? AND tenant_id = ?').get(req.params.siteId, req.params.id, req.tenantId);
+  if (!site) return res.status(404).json({ error: 'Site not found' });
+  
+  // GCP safety: Check if documents are filed under this site
+  const docCount = db.prepare('SELECT COUNT(*) as c FROM documents WHERE site_id = ? AND tenant_id = ?').get(req.params.siteId, req.tenantId).c;
+  if (docCount > 0) {
+    return res.status(400).json({ error: `Cannot delete site "${site.site_code}": ${docCount} documents are currently filed under this site.` });
+  }
+  
+  db.prepare('DELETE FROM sites WHERE id = ? AND study_id = ? AND tenant_id = ?').run(req.params.siteId, req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, studyId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Site Deleted', objectType: 'site', objectId: req.params.siteId, objectName: site.name, ip: req.ip });
+  res.json({ message: 'Site removed successfully' });
+});
+
 studyRoutes.post('/:id/lock', requireCap('canLock'), (req, res) => {
   const db = getDB();
   const study = db.prepare('SELECT * FROM studies WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
@@ -291,14 +320,25 @@ studyRoutes.post('/:id/lock', requireCap('canLock'), (req, res) => {
   const openQueries = db.prepare("SELECT COUNT(*) as c FROM queries WHERE study_id = ? AND status = 'Open'").get(req.params.id).c;
   if (openTasks > 0 && !req.body.force) return res.status(400).json({ error: `${openTasks} documents not yet approved`, code: 'PRELOCK_FAILED', openTasks, openQueries });
   if (openQueries > 0 && !req.body.force) return res.status(400).json({ error: `${openQueries} open queries must be resolved`, code: 'PRELOCK_FAILED', openTasks, openQueries });
-  db.prepare("UPDATE studies SET locked = 1, locked_by = ?, locked_at = datetime('now'), status = 'Closed' WHERE id = ?").run(req.user.id, req.params.id);
+  db.prepare("UPDATE studies SET locked = 1, locked_by = ?, locked_at = datetime('now'), status = 'Locked' WHERE id = ?").run(req.user.id, req.params.id);
   appendAudit({ tenantId: req.tenantId, studyId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Study Locked', objectType: 'study', objectId: req.params.id, objectName: study.title, ip: req.ip });
   res.json({ message: 'Study locked successfully' });
+});
+
+studyRoutes.post('/:id/unlock', requireCap('canLock'), (req, res) => {
+  const db = getDB();
+  const study = db.prepare('SELECT * FROM studies WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!study) return res.status(404).json({ error: 'Study not found' });
+  if (!study.locked) return res.status(400).json({ error: 'Study is not locked' });
+  db.prepare("UPDATE studies SET locked = 0, locked_by = NULL, locked_at = NULL, status = 'Active' WHERE id = ?").run(req.params.id);
+  appendAudit({ tenantId: req.tenantId, studyId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Study Unlocked', objectType: 'study', objectId: req.params.id, objectName: study.title, ip: req.ip });
+  res.json({ message: 'Study unlocked successfully' });
 });
 
 studyRoutes.get('/:id/completeness', (req, res) => {
   const db = getDB();
   const docs = db.prepare('SELECT zone, zone_label, status, mandatory FROM documents WHERE study_id = ? AND tenant_id = ?').all(req.params.id, req.tenantId);
+  const placeholders = db.prepare('SELECT zone, zone_label, artifact_code, artifact_name, mandatory, na_designated FROM placeholders WHERE study_id = ? AND tenant_id = ?').all(req.params.id, req.tenantId);
   const zones = {};
   docs.forEach(d => {
     if (!zones[d.zone]) zones[d.zone] = { zone: d.zone, label: d.zone_label, total: 0, mandatory: 0, approved: 0 };
@@ -307,7 +347,7 @@ studyRoutes.get('/:id/completeness', (req, res) => {
     if (d.status === 'Approved') zones[d.zone].approved++;
   });
   const overall = docs.length ? Math.round((docs.filter(d => d.status === 'Approved').length / docs.length) * 100) : 0;
-  res.json({ overall, zones: Object.values(zones), totalDocs: docs.length, approved: docs.filter(d => d.status === 'Approved').length });
+  res.json({ overall, zones: Object.values(zones), totalDocs: docs.length, approved: docs.filter(d => d.status === 'Approved').length, totalPlaceholders: placeholders.length });
 });
 
 studyRoutes.post('/:id/archive', requireCap('canAdmin'), (req, res) => {
@@ -327,19 +367,43 @@ studyRoutes.post('/:id/clone', requireCap('canAdmin'), (req, res) => {
   if (!study) return res.status(404).json({ error: 'Source study not found' });
   if (!newProtocolNumber || !newTitle) return res.status(400).json({ error: 'newProtocolNumber and newTitle required' });
   
+  const existing = db.prepare('SELECT id FROM studies WHERE tenant_id = ? AND protocol_number = ?').get(req.tenantId, newProtocolNumber);
+  if (existing) return res.status(409).json({ error: `Study protocol ${newProtocolNumber} already exists` });
+
   const id = `study-${Date.now()}`;
-  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,tmf_model_version,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .run(id, req.tenantId, newProtocolNumber, newTitle, study.phase, study.therapeutic_area, study.sponsor_name, study.cro_name, study.tmf_model_version, 'Setup', req.user.id);
+  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,tmf_model_version,status,countries,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .run(id, req.tenantId, newProtocolNumber, newTitle, study.phase, study.therapeutic_area, study.sponsor_name, study.cro_name, study.tmf_model_version, 'Active', study.countries || '[]', req.user.id);
   
+  // Clone sites
+  const sourceSites = db.prepare('SELECT * FROM sites WHERE study_id = ? AND tenant_id = ?').all(req.params.id, req.tenantId);
+  if (sourceSites.length > 0) {
+    const insSite = db.prepare('INSERT OR IGNORE INTO sites (id, tenant_id, study_id, site_code, name, country, pi_name, status, activation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    sourceSites.forEach((s, idx) => {
+      insSite.run(`site-${Date.now()}-${idx + 1}`, req.tenantId, id, s.site_code, s.name, s.country, s.pi_name || '', 'Active', s.activation_date || new Date().toISOString().split('T')[0]);
+    });
+  }
+
+  // Clone placeholders
   const items = db.prepare('SELECT * FROM placeholders WHERE study_id = ?').all(req.params.id);
-  const ins = db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, section, is_mandatory, created_by) VALUES (?,?,?,?,?,?,?,?,?)');
-  const tx = db.transaction((phItems) => {
-    phItems.forEach(ph => ins.run(uuid(), req.tenantId, id, ph.artifact_code, ph.artifact_name, ph.zone, ph.section, ph.is_mandatory, req.user.id));
-  });
-  tx(items);
+  if (items.length > 0) {
+    const ins = db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, mandatory, is_mandatory, expected_by, expected_by_date, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    const tx = db.transaction((phItems) => {
+      phItems.forEach(ph => ins.run(
+        uuid(), req.tenantId, id, ph.artifact_code, ph.artifact_name, ph.zone,
+        ph.zone_label || null, ph.section, ph.section_label || null,
+        ph.mandatory ?? 1, ph.is_mandatory ?? ph.mandatory ?? 1,
+        ph.expected_by || ph.expected_by_date || null,
+        ph.expected_by_date || ph.expected_by || null,
+        req.user.id
+      ));
+    });
+    tx(items);
+  }
   
-  appendAudit({ tenantId: req.tenantId, studyId: id, userId: req.user.id, userName: req.user.name, action: 'Study Cloned', objectType: 'study', objectId: id, detail: `Cloned from ${req.params.id}`, ip: req.ip });
-  res.status(201).json({ study: db.prepare('SELECT * FROM studies WHERE id = ?').get(id) });
+  appendAudit({ tenantId: req.tenantId, studyId: id, userId: req.user.id, userName: req.user.name, action: 'Study Cloned', objectType: 'study', objectId: id, detail: `Cloned from ${req.params.id} (${items.length} placeholders, ${sourceSites.length} sites)`, ip: req.ip });
+  const clonedStudy = db.prepare('SELECT * FROM studies WHERE id = ?').get(id);
+  try { clonedStudy.countries = JSON.parse(clonedStudy.countries || '[]'); } catch(e) { clonedStudy.countries = []; }
+  res.status(201).json({ study: clonedStudy, placeholdersCloned: items.length, sitesCloned: sourceSites.length });
 });
 
 studyRoutes.post('/:id/migrate-model', requireCap('canAdmin'), (req, res) => {
@@ -352,8 +416,8 @@ studyRoutes.post('/:id/migrate-model', requireCap('canAdmin'), (req, res) => {
   
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM placeholders WHERE study_id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
-    const ins = db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, section, is_mandatory, created_by) VALUES (?,?,?,?,?,?,?,?,?)');
-    items.forEach(item => ins.run(uuid(), req.tenantId, req.params.id, item.artifact, item.artifact_name, item.zone, item.section, item.is_mandatory, req.user.id));
+    const ins = db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, section, mandatory, is_mandatory, created_by) VALUES (?,?,?,?,?,?,?,?,?,?)');
+    items.forEach(item => ins.run(uuid(), req.tenantId, req.params.id, item.artifact, item.artifact_name, item.zone, item.section, item.is_mandatory ? 1 : 0, item.is_mandatory ? 1 : 0, req.user.id));
   });
   tx();
   
@@ -660,6 +724,8 @@ adminRoutes.post('/user-groups', (req, res) => {
   const db = getDB();
   const { name, description, isActive, zones = [], privileges = [], folderAssignments = [], folder_assignments = [], members = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Group name required' });
+  const existing = db.prepare('SELECT id FROM user_groups WHERE tenant_id = ? AND name = ?').get(req.tenantId, name);
+  if (existing) return res.status(409).json({ error: `User group "${name}" already exists` });
   const id = uuid();
   const activeFlag = isActive === false ? 0 : 1;
   const folders = folderAssignments.length ? folderAssignments : folder_assignments;
@@ -785,6 +851,8 @@ adminRoutes.post('/functional-roles', (req, res) => {
   const db = getDB();
   const { name, description, capabilities = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Role name required' });
+  const existing = db.prepare('SELECT id FROM functional_roles WHERE tenant_id = ? AND name = ?').get(req.tenantId, name);
+  if (existing) return res.status(409).json({ error: `Functional role "${name}" already exists` });
   const id = uuid();
   db.prepare('INSERT INTO functional_roles (id, tenant_id, name, description, capabilities) VALUES (?, ?, ?, ?, ?)')
     .run(id, req.tenantId, name, description || '', JSON.stringify(capabilities));
@@ -803,6 +871,27 @@ adminRoutes.put('/functional-roles/:id', (req, res) => {
   const role = db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(req.params.id);
   try { role.capabilities = JSON.parse(role.capabilities || '[]'); } catch(e) { role.capabilities = []; }
   res.json({ message: 'Functional role updated', role });
+});
+
+adminRoutes.delete('/functional-roles/:id', (req, res) => {
+  const db = getDB();
+  const role = db.prepare('SELECT * FROM functional_roles WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!role) return res.status(404).json({ error: 'Functional role not found' });
+  
+  // Protect the 21 standard seeded clinical roles from deletion
+  if (role.id.startsWith('frole-')) {
+    return res.status(403).json({ error: 'Standard GCP clinical functional roles cannot be deleted' });
+  }
+  
+  // Check if active users are assigned to this role
+  const assignedCount = db.prepare('SELECT COUNT(*) as c FROM user_functional_roles WHERE role_id = ?').get(req.params.id).c;
+  if (assignedCount > 0) {
+    return res.status(400).json({ error: `Cannot delete functional role: ${assignedCount} user(s) currently assigned. Please reassign users first.` });
+  }
+  
+  db.prepare('DELETE FROM functional_roles WHERE id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Functional Role Deleted', objectType: 'functional_role', objectId: req.params.id, objectName: role.name, ip: req.ip });
+  res.json({ message: 'Functional role deleted' });
 });
 
 adminRoutes.post('/functional-roles/:id/assign', (req, res) => {
@@ -952,6 +1041,8 @@ adminRoutes.post('/system-codelists', (req, res) => {
   const db = getDB();
   const { code, name, group_name, is_active } = req.body;
   if (!code || !name || !group_name) return res.status(400).json({ error: 'Code, name and group_name required' });
+  const existing = db.prepare('SELECT id FROM system_codelists WHERE tenant_id = ? AND group_name = ? AND code = ?').get(req.tenantId, group_name, code);
+  if (existing) return res.status(409).json({ error: `Codelist with code "${code}" already exists in ${group_name}` });
   const id = uuid();
   const activeFlag = is_active === false ? 0 : 1;
   db.prepare('INSERT INTO system_codelists (id, tenant_id, code, name, group_name, is_active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -963,6 +1054,8 @@ adminRoutes.post('/system-codelists', (req, res) => {
 adminRoutes.put('/system-codelists/:id', (req, res) => {
   const db = getDB();
   const { code, name, group_name, is_active } = req.body;
+  const existing = db.prepare('SELECT id FROM system_codelists WHERE tenant_id = ? AND group_name = ? AND code = ? AND id != ?').get(req.tenantId, group_name, code, req.params.id);
+  if (existing) return res.status(409).json({ error: `Codelist with code "${code}" already exists in ${group_name}` });
   const activeFlag = is_active === false ? 0 : 1;
   db.prepare('UPDATE system_codelists SET code = ?, name = ?, group_name = ?, is_active = ? WHERE id = ? AND tenant_id = ?')
     .run(code, name, group_name, activeFlag, req.params.id, req.tenantId);
@@ -1169,8 +1262,9 @@ folderRoutes.post('/placeholders', requireCap('canUpload'), (req, res) => {
   if (!study_id || !artifact_code) return res.status(400).json({ error: 'study_id and artifact_code required' });
   
   const id = uuid();
-  db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, folder_id, artifact_code, artifact_name, zone, section, expected_by_date, is_mandatory, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, req.tenantId, study_id, folder_id || null, artifact_code, artifact_name || '', zone || '', section || '', expected_by_date || null, is_mandatory === false ? 0 : 1, req.user.id);
+  const mand = is_mandatory === false ? 0 : 1;
+  db.prepare('INSERT INTO placeholders (id, tenant_id, study_id, folder_id, artifact_code, artifact_name, zone, section, expected_by_date, expected_by, is_mandatory, mandatory, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, study_id, folder_id || null, artifact_code, artifact_name || '', zone || '', section || '', expected_by_date || null, expected_by_date || null, mand, mand, req.user.id);
   
   appendAudit({ tenantId: req.tenantId, studyId: study_id, userId: req.user.id, userName: req.user.name, action: 'Placeholder Created', objectType: 'placeholder', objectId: id, objectName: artifact_code, ip: req.ip });
   res.status(201).json({ message: 'Placeholder created', id });
@@ -1180,9 +1274,15 @@ folderRoutes.patch('/placeholders/:id', requireCap('canUpload'), (req, res) => {
   const db = getDB();
   const { is_mandatory, na_designated, expected_by_date } = req.body;
   const updates = []; const params = [];
-  if (is_mandatory !== undefined) { updates.push('is_mandatory = ?'); params.push(is_mandatory ? 1 : 0); }
+  if (is_mandatory !== undefined) {
+    updates.push('is_mandatory = ?', 'mandatory = ?');
+    params.push(is_mandatory ? 1 : 0, is_mandatory ? 1 : 0);
+  }
   if (na_designated !== undefined) { updates.push('na_designated = ?'); params.push(na_designated ? 1 : 0); }
-  if (expected_by_date !== undefined) { updates.push('expected_by_date = ?'); params.push(expected_by_date); }
+  if (expected_by_date !== undefined) {
+    updates.push('expected_by_date = ?', 'expected_by = ?');
+    params.push(expected_by_date, expected_by_date);
+  }
   
   if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
   params.push(req.params.id, req.tenantId);
