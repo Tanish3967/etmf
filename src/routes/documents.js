@@ -10,7 +10,7 @@ import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, existsSync } from 'fs';
 import { getDB, appendAudit } from '../database.js';
-import { requireAuth, requireCap, blockInspector, requireUnlockedStudy } from '../middleware/auth.js';
+import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(__dirname, '../../../uploads');

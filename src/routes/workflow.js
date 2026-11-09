@@ -7,7 +7,7 @@ import bcrypt from 'bcryptjs';
 import { v4 as uuid } from 'uuid';
 import crypto from 'crypto';
 import { getDB, appendAudit } from '../database.js';
-import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
+import { requireAuth, blockInspector } from '../middleware/auth.js';
 
 const router = Router();
 router.use(requireAuth);

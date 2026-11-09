@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react';
 import api from '../../api';
-import { DIA_TMF_ZONES } from '../folder/FolderTree';
 
 export default function DocumentUploadModal({ currentFolderNode, onClose, onUploaded }) {
   const [fileList, setFileList] = useState([]);
