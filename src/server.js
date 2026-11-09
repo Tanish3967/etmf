@@ -67,7 +67,7 @@ app.use(requestLogger);
 // ── Rate limiting (21 CFR Part 11 — account lockout protection) ──
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: process.env.NODE_ENV === 'production' ? 5 : 200,
   message: { error: 'Too many login attempts. Account temporarily locked.' },
   standardHeaders: true,
   legacyHeaders: false,

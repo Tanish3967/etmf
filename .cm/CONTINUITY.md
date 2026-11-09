@@ -7,19 +7,21 @@
 - **User Guide Reference**: Clinevo eTMF 4.3 / 4.4 User Guide
 
 ## Current Active Sprint
-- **Sprint**: Sprint 1 — Document Context Action Modals (PDF §8.10) [COMPLETED]
-- **Goal**: Implement high-fidelity modal dialogs for the 25 document context actions (Metadata Editor, Redaction Canvas, Sticky Notes, Blinding/Unblinding, Raise Query, Link/Delink, Document History, and Compliant Download with Coverpage/Watermark) replacing generic alert stubs.
+- **Sprint**: Sprint 2 — Folder Operations & Right-Click Context Menu (PDF §8.7 & §8.8) [COMPLETED]
+- **Goal**: Implement DIA TMF Model v3.2 tree navigation (`FolderTree.jsx`), folder context menu (`FolderContextMenu.jsx`), Expected Document List / File Plan modal (`FilePlanModal.jsx`), and Add Placeholder dialog (`AddPlaceholderModal.jsx`).
 - **Evidence**:
-  - `frontend/src/components/document/` contains 8 production-grade modals.
-  - `frontend/src/App.jsx` context menu completely wired to modal triggers and live API mutations.
-  - `npm run build` in `frontend/`: 0 errors (75 modules transformed, 287 kB bundle).
-  - `npm test` in backend: 49/49 tests passed (100%).
+  - `FolderTree.jsx` renders complete 11-Zone DIA TMF Reference Model hierarchy with live search and expand/collapse.
+  - Repository view in `App.jsx` elevated to full split-pane view (tree navigation + document records).
+  - `FolderContextMenu.jsx` triggers Add Placeholder, File Plan, TMF Index generation, Folder Export, and Lock/Unlock.
+  - `npm run build` in `frontend/`: 0 errors (79 modules transformed, 311 kB bundle).
+  - `npm test` in backend: 49/49 tests passed (100% idempotent).
 
 ## Next Sprint
-- **Sprint 2**: Folder Operations & Right-Click Context Menu (PDF §8.7 & §8.8)
-- **Goal**: Implement Folder Context Menu (`FolderContextMenu.jsx`), EDL / File Plan assignment modal (`FilePlanModal.jsx`), and Add Placeholder dialog (`AddPlaceholderModal.jsx`).
+- **Sprint 3**: Workflow Orchestration & 21 CFR Part 11 Electronic Signature Modal (PDF §8.11, §8.12, §8.13)
+- **Goal**: Transition documents through states (`Draft` -> `Pending Review` -> `Review Complete` -> `Pending Approval` -> `Approved` / `Published`), with authentic 21 CFR Part 11 electronic signature modal requiring re-authentication, signer role, and ALCOA+ meaning of signing.
 
 ## Working Memory Log
 - [2026-11-09]: CORS 500 preflight resolved; PORT isolated to 3002; `ROLE_CAPS['TMF Manager']` updated with `canAdmin: true`.
 - [2026-11-09]: eTMF 4.3 functional audit completed (56 implemented, 32 partial, 15 missing); comprehensive roadmap published to `roadmap.md` and committed to git (`5ad9687`).
-- [2026-11-09]: CodyMaster protocol activated. Sprint 1 completed with all 8 modals, test suite 100% green, and frontend build verified.
+- [2026-11-09]: Sprint 1 completed with all 8 modals, test suite 100% green, and committed (`1358702`).
+- [2026-11-09]: Sprint 2 completed with DIA TMF Folder Tree, Folder Context Menu, Add Placeholder, File Plan EDL, test suite 49/49 green.

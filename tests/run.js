@@ -4,6 +4,7 @@
  * Tests all routes, auth, workflow, ALCOA+, 21 CFR Part 11
  */
 import http from 'http';
+import { initDB, getDB } from '../src/database.js';
 
 const BASE = process.env.TEST_URL || 'http://localhost:3002';
 let passed = 0, failed = 0, token = null, testDocId = null, testQueryId = null;
@@ -51,6 +52,16 @@ function assert(condition, msg) {
 
 async function run() {
   console.log('\n🧪 eTMF Pro Backend Test Suite\n');
+
+  try {
+    initDB();
+    const db = getDB();
+    db.prepare("UPDATE documents SET status = 'Draft', title = 'Statistical Analysis Plan v1.0' WHERE id = 'doc-005'").run();
+    db.prepare("DELETE FROM studies WHERE protocol_number = 'TEST-2025-099'").run();
+    db.prepare("UPDATE users SET failed_attempts = 0, locked_until = NULL").run();
+  } catch (e) {
+    // ignore if db already open in process
+  }
 
   // ── Health ────────────────────────────────────────────────
   console.log('Health & connectivity');

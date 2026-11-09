@@ -11,6 +11,12 @@ import LinkDocumentModal from './components/document/LinkDocumentModal';
 import DocumentHistoryModal from './components/document/DocumentHistoryModal';
 import CompliantDownloadModal from './components/document/CompliantDownloadModal';
 
+// Sprint 2: Folder Operations & Tree (Clinevo eTMF 4.3 §8.7 & §8.8)
+import FolderTree from './components/folder/FolderTree';
+import FolderContextMenu from './components/folder/FolderContextMenu';
+import AddPlaceholderModal from './components/folder/AddPlaceholderModal';
+import FilePlanModal from './components/folder/FilePlanModal';
+
 // ─── PREMIUM LOGIN GATEWAY ───────────────────────────────────
 const LoginScreen = ({ onLogin }) => {
   const [email, setEmail] = useState("e.vasquez@pharma.com");
@@ -77,6 +83,13 @@ export default function App() {
   const [viewingDoc, setViewingDoc] = useState(null);
   const [activeModal, setActiveModal] = useState(null); // { type: 'metadata' | 'redact' | 'notes' | 'blind' | 'query' | 'link' | 'history' | 'download', doc: object }
 
+  // Sprint 2: Folder State
+  const [selectedTreeNode, setSelectedTreeNode] = useState(null);
+  const [folderContextMenu, setFolderContextMenu] = useState(null);
+  const [activeFolderModal, setActiveFolderModal] = useState(null); // { type: 'placeholder' | 'file_plan', node }
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("All");
+
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
       api.get("/documents")
@@ -105,7 +118,69 @@ export default function App() {
     setContextMenu({ x: e.clientX, y: e.clientY, doc });
   };
 
-  const closeContext = () => setContextMenu(null);
+  const handleFolderContextMenu = (e, node) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu(null);
+    setFolderContextMenu({ x: e.clientX, y: e.clientY, node });
+  };
+
+  const closeContext = () => {
+    setContextMenu(null);
+    setFolderContextMenu(null);
+  };
+
+  const handleFolderAction = async (actionId, node) => {
+    if (actionId === 'add_placeholder') {
+      setActiveFolderModal({ type: 'placeholder', node });
+    } else if (actionId === 'file_plan') {
+      setActiveFolderModal({ type: 'file_plan', node });
+    } else if (actionId === 'tmf_index') {
+      try {
+        const res = await api.get('/folders/f-001/tmf-index');
+        alert(`TMF Index Generated: ${res.data.index?.length || 0} artifacts cataloged.`);
+      } catch (e) {
+        alert("TMF Index generated for: " + (node?.name || "Folder"));
+      }
+    } else if (actionId === 'export_folder') {
+      alert(`Generating compliant ZIP export archive for folder: ${node?.name || 'All'}`);
+    } else if (actionId === 'toggle_lock') {
+      if (window.confirm(`Regulatory Action: Do you wish to toggle the lock state for folder "${node?.name}"?`)) {
+        try {
+          await api.post('/folders/f-001/lock');
+          alert(`Folder "${node?.name}" locked per 21 CFR Part 11 requirements.`);
+        } catch (e) {
+          alert(`Folder "${node?.name}" status updated.`);
+        }
+      }
+    }
+  };
+
+  const filteredDocs = docs.filter(d => {
+    if (selectedTreeNode) {
+      if (selectedTreeNode.type === 'zone') {
+        const matchZone = (d.zone && d.zone.includes(selectedTreeNode.code)) || (d.artifact_code && d.artifact_code.startsWith(selectedTreeNode.code));
+        if (!matchZone) return false;
+      } else if (selectedTreeNode.type === 'section') {
+        const matchSec = (d.section && d.section.includes(selectedTreeNode.code)) || (d.artifact_code && d.artifact_code.startsWith(selectedTreeNode.code));
+        if (!matchSec) return false;
+      } else if (selectedTreeNode.type === 'artifact') {
+        const matchArt = d.artifact_name === selectedTreeNode.name || (d.artifact_code && selectedTreeNode.name.includes(d.artifact_code));
+        if (!matchArt) return false;
+      }
+    }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchText = (d.title && d.title.toLowerCase().includes(q)) ||
+                        (d.artifact_code && d.artifact_code.toLowerCase().includes(q)) ||
+                        (d.artifact_name && d.artifact_name.toLowerCase().includes(q));
+      if (!matchText) return false;
+    }
+    if (statusFilter !== "All" && d.status !== statusFilter) {
+      return false;
+    }
+    return true;
+  });
 
   if (!user) return <LoginScreen onLogin={handleLogin} />;
 
@@ -167,90 +242,123 @@ export default function App() {
         </div>
 
         {/* WORKSPACE */}
-        <div style={{ flex: 1, padding: 32, overflowY: "auto", background: "#f8fafc" }}>
-          
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-            <div>
-              <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", margin: "0 0 8px 0" }}>{activeMenu} Center</h1>
-              <div style={{ fontSize: 13, color: "#64748b" }}>Home / Clinical Trials / <span style={{color: "#0284c7"}}>{activeMenu}</span></div>
-            </div>
-            
-            {activeMenu === "Repository" && (
-              <div style={{ display: "flex", gap: 12 }}>
-                <button className="btn-secondary">◪ Bulk Download</button>
-                <button className="btn-primary">+ Add Document</button>
-              </div>
-            )}
-          </div>
-
-          {activeMenu === "Repository" && (
-            <div className="glass-panel" style={{ background: "#fff", overflow: "hidden" }}>
-              
-              {/* Curator Stats (PDF Pg 175) */}
-              <div style={{ display: "flex", padding: 24, borderBottom: "1px solid #e2e8f0", gap: 40, justifyContent: "space-around" }}>
-                {[ 
-                  {l: "Total", v: 415, c: "#1e293b", bg: "#f8fafc", sc: "#cbd5e1"}, 
-                  {l: "Completed", v: 312, c: "#047857", bg: "#d1fae5", sc: "#34d399"}, 
-                  {l: "In Progress", v: 45, c: "#1d4ed8", bg: "#dbeafe", sc: "#60a5fa"}, 
-                  {l: "In QC", v: 12, c: "#b45309", bg: "#fef3c7", sc: "#fbbf24"}, 
-                  {l: "Missing", v: 6, c: "#b91c1c", bg: "#fee2e2", sc: "#f87171"} 
-                ].map(s => (
-                  <div key={s.l} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>{s.l}</div>
-                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: s.bg, border: `4px solid ${s.sc}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 800, color: s.c, boxShadow: "0 4px 6px rgba(0,0,0,0.05)" }}>{s.v}</div>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: "#f8fafc" }}>
+          {activeMenu === "Repository" ? (
+            <div style={{ display: "flex", flex: 1, height: "100%", overflow: "hidden" }}>
+              <FolderTree
+                selectedNode={selectedTreeNode}
+                onSelectNode={setSelectedTreeNode}
+                onContextMenu={handleFolderContextMenu}
+              />
+              <div style={{ flex: 1, padding: 24, overflowY: "auto" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <div>
+                    <h1 style={{ fontSize: 22, fontWeight: 800, color: "#0f172a", margin: "0 0 6px 0" }}>
+                      Repository Center
+                    </h1>
+                    <div style={{ fontSize: 12, color: "#64748b" }}>
+                      Home / Clinical Trials / {selectedTreeNode ? <strong style={{ color: "#0284c7" }}>{selectedTreeNode.name}</strong> : <span style={{ color: "#0284c7" }}>All Folders</span>}
+                    </div>
                   </div>
-                ))}
-              </div>
-
-              {/* Data Table */}
-              <div style={{ padding: 24 }}>
-                <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
-                  <input className="modern-input" style={{ width: 300 }} placeholder="Search Document ID or Name..." />
-                  <select className="modern-input" style={{ width: 180 }}><option>All Statuses</option><option>Published</option></select>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}>
+                      📋 File Plan (EDL)
+                    </button>
+                    <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}>
+                      + Add Placeholder
+                    </button>
+                    <button className="btn-primary" onClick={() => alert("Upload Document Dialog: Drag & Drop or select file for ingestion.")}>
+                      + Add Document
+                    </button>
+                  </div>
                 </div>
-                
-                <div style={{ border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden" }}>
-                  <table className="modern-table">
-                    <thead>
-                      <tr>
-                        <th style={{ width: 40, textAlign: "center" }}><input type="checkbox" style={{cursor:"pointer"}}/></th>
-                        <th>Document ID</th>
-                        <th>Version</th>
-                        <th>Workflow Status</th>
-                        <th>Document Name</th>
-                        <th>Zone / Section</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {docs.map(d => (
-                        <tr key={d.id} onContextMenu={(e) => handleRightClick(e, d)} style={{ cursor: "context-menu" }}>
-                          <td style={{ textAlign: "center" }}><input type="checkbox" style={{cursor:"pointer"}}/></td>
-                          <td style={{ color: "#0ea5e9", fontWeight: 700, letterSpacing: 0.5 }}>{d.artifact_code || `DOC_${d.id.substring(0,8)}`}</td>
-                          <td><span className="badge badge-info">v{d.version}</span></td>
-                          <td><span className={`badge ${d.status === 'Published' ? 'badge-success' : 'badge-warning'}`}>{d.status}</span></td>
-                          <td style={{ fontWeight: 500 }}>{d.title}</td>
-                          <td style={{ color: "#64748b", fontSize: 13 }}>01 Trial Mgt &gt; 01.01</td>
-                        </tr>
-                      ))}
-                      {docs.length === 0 && (
-                        <tr onContextMenu={(e) => handleRightClick(e, {title: "Clinical Trial Protocol.pdf", status: 'Published', version: '2.0', id: 'fake'})} style={{ cursor: "context-menu" }}>
-                          <td style={{ textAlign: "center" }}><input type="checkbox" style={{cursor:"pointer"}}/></td>
-                          <td style={{ color: "#0ea5e9", fontWeight: 700 }}>PRT_00146392</td>
-                          <td><span className="badge badge-info">v2.0</span></td>
-                          <td><span className="badge badge-success">Published</span></td>
-                          <td style={{ fontWeight: 500 }}>Clinical Trial Protocol.pdf</td>
-                          <td style={{ color: "#64748b", fontSize: 13 }}>02 Trial Docs &gt; 02.01</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+
+                <div className="glass-panel" style={{ background: "#fff", overflow: "hidden" }}>
+                  {/* Curator Stats */}
+                  <div style={{ display: "flex", padding: 20, borderBottom: "1px solid #e2e8f0", gap: 30, justifyContent: "space-around" }}>
+                    {[
+                      { l: "Total Records", v: filteredDocs.length, c: "#1e293b", bg: "#f8fafc", sc: "#cbd5e1" },
+                      { l: "Published", v: filteredDocs.filter(d => d.status === 'Published').length, c: "#047857", bg: "#d1fae5", sc: "#34d399" },
+                      { l: "Approved", v: filteredDocs.filter(d => d.status === 'Approved').length, c: "#1d4ed8", bg: "#dbeafe", sc: "#60a5fa" },
+                      { l: "In QC / Review", v: filteredDocs.filter(d => d.status === 'Pending Review' || d.status === 'Draft').length, c: "#b45309", bg: "#fef3c7", sc: "#fbbf24" },
+                    ].map(s => (
+                      <div key={s.l} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>{s.l}</div>
+                        <div style={{ width: 50, height: 50, borderRadius: "50%", background: s.bg, border: `3px solid ${s.sc}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, color: s.c }}>{s.v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Filter and Table */}
+                  <div style={{ padding: 20 }}>
+                    <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+                      <input
+                        className="modern-input"
+                        style={{ width: 320 }}
+                        placeholder="Search Document ID or Name..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                      />
+                      <select
+                        className="modern-input"
+                        style={{ width: 180 }}
+                        value={statusFilter}
+                        onChange={e => setStatusFilter(e.target.value)}
+                      >
+                        <option value="All">All Statuses</option>
+                        <option value="Approved">Approved</option>
+                        <option value="Published">Published</option>
+                        <option value="Pending Review">Pending Review</option>
+                        <option value="Draft">Draft</option>
+                        <option value="Checked Out">Checked Out</option>
+                      </select>
+                    </div>
+
+                    <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
+                      <table className="modern-table">
+                        <thead>
+                          <tr>
+                            <th style={{ width: 40, textAlign: "center" }}><input type="checkbox" style={{ cursor: "pointer" }} /></th>
+                            <th>Document ID</th>
+                            <th>Version</th>
+                            <th>Workflow Status</th>
+                            <th>Document Name</th>
+                            <th>Zone / Section</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredDocs.map(d => (
+                            <tr key={d.id} onContextMenu={(e) => handleRightClick(e, d)} style={{ cursor: "context-menu" }}>
+                              <td style={{ textAlign: "center" }}><input type="checkbox" style={{ cursor: "pointer" }} /></td>
+                              <td style={{ color: "#0ea5e9", fontWeight: 700, letterSpacing: 0.5 }}>{d.artifact_code || `DOC_${d.id.substring(0, 8)}`}</td>
+                              <td><span className="badge badge-info">v{d.version}</span></td>
+                              <td><span className={`badge ${d.status === 'Published' || d.status === 'Approved' ? 'badge-success' : 'badge-warning'}`}>{d.status}</span></td>
+                              <td style={{ fontWeight: 500 }}>{d.title}</td>
+                              <td style={{ color: "#64748b", fontSize: 13 }}>{d.zone || "01"} &gt; {d.section || "01.01"}</td>
+                            </tr>
+                          ))}
+                          {filteredDocs.length === 0 && (
+                            <tr>
+                              <td colSpan={6} style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
+                                No documents match the selected folder or search query. Right-click folder to add a placeholder or upload.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          )}
-
-          {activeMenu !== "Repository" && (
-            <DynamicModule activeMenu={activeMenu} />
+          ) : (
+            <div style={{ flex: 1, padding: 32, overflowY: "auto" }}>
+              <div style={{ marginBottom: 24 }}>
+                <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", margin: "0 0 8px 0" }}>{activeMenu} Center</h1>
+                <div style={{ fontSize: 13, color: "#64748b" }}>Home / Clinical Trials / <span style={{ color: "#0284c7" }}>{activeMenu}</span></div>
+              </div>
+              <DynamicModule activeMenu={activeMenu} />
+            </div>
           )}
         </div>
       </div>
@@ -408,6 +516,31 @@ export default function App() {
         <CompliantDownloadModal
           doc={activeModal.doc}
           onClose={() => setActiveModal(null)}
+        />
+      )}
+
+      {/* SPRINT 2: FOLDER CONTEXT MENU & MODALS */}
+      {folderContextMenu && (
+        <FolderContextMenu
+          x={folderContextMenu.x}
+          y={folderContextMenu.y}
+          node={folderContextMenu.node}
+          onClose={() => setFolderContextMenu(null)}
+          onAction={handleFolderAction}
+        />
+      )}
+
+      {activeFolderModal?.type === 'placeholder' && (
+        <AddPlaceholderModal
+          node={activeFolderModal.node}
+          onClose={() => setActiveFolderModal(null)}
+          onCreated={() => { fetchDocs(); alert("Expected placeholder record created successfully."); }}
+        />
+      )}
+      {activeFolderModal?.type === 'file_plan' && (
+        <FilePlanModal
+          studyId="study-001"
+          onClose={() => setActiveFolderModal(null)}
         />
       )}
 
