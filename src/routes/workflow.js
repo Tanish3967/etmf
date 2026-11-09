@@ -183,8 +183,8 @@ router.get('/tasks', (req, res) => {
   res.json({ tasks: withSLA, expiring, total: withSLA.length });
 });
 
-// ── GET /api/workflow/sla — SLA dashboard ───────────────────
-router.get('/sla', (req, res) => {
+// ── GET /api/workflow/sla & /sla-dashboard — SLA dashboard ───────────────────
+const slaDashboardHandler = (req, res) => {
   const db = getDB();
   const inWorkflow = db.prepare(`
     SELECT d.*,
@@ -213,6 +213,9 @@ router.get('/sla', (req, res) => {
   };
 
   res.json({ documents: slaData, summary, thresholds: SLA_LIMITS });
-});
+};
+
+router.get('/sla', slaDashboardHandler);
+router.get('/sla-dashboard', slaDashboardHandler);
 
 export default router;

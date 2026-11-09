@@ -1161,7 +1161,7 @@ studyRoutes.post('/templates/:id/model', requireCap('canAdmin'), (req, res) => {
 const formRoutes = R();
 formRoutes.use(requireAuth);
 
-formRoutes.get('/schemas', (req, res) => {
+const getSchemasHandler = (req, res) => {
   const db = getDB();
   const schemas = db.prepare('SELECT * FROM forms_schemas WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
   // Parse schema_json
@@ -1169,7 +1169,10 @@ formRoutes.get('/schemas', (req, res) => {
     try { s.schema_json = JSON.parse(s.schema_json); } catch(e) {}
   });
   res.json({ schemas });
-});
+};
+
+formRoutes.get('/', getSchemasHandler);
+formRoutes.get('/schemas', getSchemasHandler);
 
 formRoutes.post('/schemas', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
@@ -1206,6 +1209,87 @@ formRoutes.post('/:schemaId/data', (req, res) => {
   
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Form Data Submitted', objectType: 'forms_data', objectId: id, ip: req.ip });
   res.status(201).json({ id, message: 'Form data submitted successfully' });
+});
+
+// Push validated clinical form rendition into eTMF repository (§12)
+formRoutes.post('/:dataId/push-to-etmf', (req, res) => {
+  const db = getDB();
+  const formData = db.prepare('SELECT * FROM forms_data WHERE id = ? AND tenant_id = ?').get(req.params.dataId, req.tenantId);
+  if (!formData) return res.status(404).json({ error: 'Form data record not found' });
+
+  const schema = db.prepare('SELECT * FROM forms_schemas WHERE id = ?').get(formData.form_schema_id);
+  const docId = `doc-form-${Date.now()}`;
+  const studyId = formData.study_id || 'study-001';
+  const artifactCode = schema?.artifact_code || '05.02.01';
+  const artifactName = schema?.name || 'Clinical Log Rendition';
+  const zone = schema?.zone || '05';
+  const section = schema?.section || '05.02';
+  const now = new Date().toISOString();
+  const docTitle = `${artifactName} - ${now.split('T')[0]}`;
+
+  db.prepare(`
+    INSERT INTO documents (
+      id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label,
+      section, section_label, title, version, status, mandatory, confidential, country,
+      effective_date, created_at, created_by, author_id
+    ) VALUES (?, ?, ?, ?, ?, ?, 'Site Management', ?, 'Delegation & Logs', ?, '1.0', 'Approved', 1, 0, 'USA', ?, ?, ?, ?)
+  `).run(docId, req.tenantId, studyId, artifactCode, artifactName, zone, section, docTitle, now.split('T')[0], now, req.user.id, req.user.id);
+
+  // Workflow entry
+  const whId = uuid();
+  db.prepare(`
+    INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment)
+    VALUES (?, ?, ?, 'Draft', 'Approved', ?, 'Form automatically compiled and published to eTMF')
+  `).run(whId, docId, req.tenantId, req.user.id);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId,
+    documentId: docId,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: 'Form Pushed to eTMF',
+    objectType: 'forms_data',
+    objectId: req.params.dataId,
+    objectName: docTitle,
+    detail: `Filed under DIA Zone ${zone} Section ${section} (${artifactCode})`,
+    ip: req.ip
+  });
+
+  res.status(201).json({
+    message: 'Form successfully pushed and filed into eTMF repository',
+    documentId: docId,
+    zone,
+    section,
+    artifactCode
+  });
+});
+
+// Lock clinical form submission (§12)
+formRoutes.patch('/data/:dataId/lock', (req, res) => {
+  const db = getDB();
+  const { reason = 'Form locked for monitoring review' } = req.body;
+  const formData = db.prepare('SELECT * FROM forms_data WHERE id = ? AND tenant_id = ?').get(req.params.dataId, req.tenantId);
+  if (!formData) return res.status(404).json({ error: 'Form data not found' });
+
+  db.prepare(`
+    UPDATE forms_data
+    SET is_locked = 1, locked_by = ?, locked_at = datetime('now')
+    WHERE id = ?
+  `).run(req.user.id, req.params.dataId);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: 'Form Locked',
+    objectType: 'forms_data',
+    objectId: req.params.dataId,
+    detail: reason,
+    ip: req.ip
+  });
+
+  res.json({ message: 'Form locked per 21 CFR Part 11 requirements' });
 });
 
 export { folderRoutes, qcRoutes, formRoutes };

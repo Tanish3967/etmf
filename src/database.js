@@ -530,9 +530,99 @@ export async function initDB() {
   addColumn('queries', 'responses', "TEXT DEFAULT '[]'");
   addColumn('queries', 'audit_comments', 'TEXT');
 
+  // Phase 4: Forms & Logs Enhancements
+  addColumn('forms_data', 'is_locked', 'INTEGER DEFAULT 0');
+  addColumn('forms_data', 'locked_by', 'TEXT');
+  addColumn('forms_data', 'locked_at', 'TEXT');
+  addColumn('forms_schemas', 'zone', "TEXT DEFAULT '05'");
+  addColumn('forms_schemas', 'section', "TEXT DEFAULT '05.02'");
+  addColumn('forms_schemas', 'artifact_code', "TEXT DEFAULT '05.02.01'");
+
+  await seedClinicalForms();
   await seedDemoData();
   console.log('✅ Database initialised');
   return db;
+}
+
+async function seedClinicalForms() {
+  try {
+    const count = db.prepare('SELECT COUNT(*) as c FROM forms_schemas').get().c;
+    if (count > 0) return;
+
+    const tenantId = 'tenant-001';
+    const schemas = [
+      {
+        id: 'form-schema-001',
+        name: 'Site Delegation of Authority Log (DOA)',
+        description: 'ICH GCP E6(R2) §4.1.5 — Principal Investigator staff responsibility delegation records',
+        zone: '05',
+        section: '05.02',
+        artifact_code: '05.02.01',
+        schema_json: JSON.stringify({
+          sections: [
+            { id: 'site_header', title: 'Site Information', fields: ['protocol_number', 'site_number', 'pi_name'] },
+            { id: 'staff_grid', title: 'Delegated Personnel & Duties', fields: ['staff_name', 'study_role', 'delegated_tasks', 'start_date', 'end_date', 'pi_initials'] }
+          ]
+        })
+      },
+      {
+        id: 'form-schema-002',
+        name: 'Monitoring Visit Log',
+        description: 'ICH GCP E6(R2) §5.18 — Site visit log for CRA / Monitor site visits',
+        zone: '05',
+        section: '05.01',
+        artifact_code: '05.01.01',
+        schema_json: JSON.stringify({
+          sections: [
+            { id: 'visit_header', title: 'Visit Details', fields: ['site_number', 'visitor_name', 'organization', 'visit_date', 'visit_type'] },
+            { id: 'visit_log', title: 'Visit Findings & Actions', fields: ['purpose', 'findings_summary', 'action_items', 'follow_up_date'] }
+          ]
+        })
+      },
+      {
+        id: 'form-schema-003',
+        name: 'Subject Screening & Enrollment Log',
+        description: 'ICH GCP E6(R2) §4.3 — Subject identification, screening consent, and trial cohort randomization',
+        zone: '06',
+        section: '06.01',
+        artifact_code: '06.01.01',
+        schema_json: JSON.stringify({
+          sections: [
+            { id: 'trial_header', title: 'Enrollment Cohort Information', fields: ['study_id', 'target_accrual', 'site_id'] },
+            { id: 'subject_grid', title: 'Screened Candidates', fields: ['screening_id', 'icf_date', 'eligibility_status', 'randomization_date', 'assigned_arm'] }
+          ]
+        })
+      }
+    ];
+
+    const insert = db.prepare(`
+      INSERT INTO forms_schemas (id, tenant_id, name, description, zone, section, artifact_code, schema_json, is_active, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'system')
+    `);
+
+    schemas.forEach(s => {
+      insert.run(s.id, tenantId, s.name, s.description, s.zone, s.section, s.artifact_code, s.schema_json);
+    });
+
+    // Seed one sample DOA entry so users immediately see live records
+    const sampleDoa = {
+      protocol_number: 'TRIAL-2024-001',
+      site_number: 'Site-001',
+      pi_name: 'Dr. Sarah Chen',
+      staff_records: [
+        { staff_name: 'Emily Watson, RN', study_role: 'Study Coordinator', delegated_tasks: 'Informed Consent, AE Reporting, Vital Signs', start_date: '2024-02-01', end_date: '', pi_initials: 'SC' },
+        { staff_name: 'David Miller, PharmD', study_role: 'Unblinded Pharmacist', delegated_tasks: 'Investigational Product Dispensing & Accountability', start_date: '2024-02-01', end_date: '', pi_initials: 'SC' }
+      ]
+    };
+    db.prepare(`
+      INSERT INTO forms_data (id, tenant_id, form_schema_id, study_id, data_json, created_by)
+      VALUES ('form-data-001', 'tenant-001', 'form-schema-001', 'study-001', ?, 'usr-002')
+    `).run(JSON.stringify(sampleDoa));
+
+    console.log('✅ Standard clinical forms seeded');
+  } catch (e) {
+    console.error('Error seeding clinical forms:', e.message);
+  }
 }
 
 async function seedDemoData() {

@@ -25,6 +25,10 @@ import BulkDownloadModal from './components/upload/BulkDownloadModal';
 import InspectorModeBanner from './components/inspection/InspectorModeBanner';
 import QualityControlCenter from './components/inspection/QualityControlCenter';
 
+// Sprint 6: Task Grid SLA Workspace (§8.2 & §8.3) & Dynamic Forms/Logs (§12)
+import MyTasksWorkspace from './components/tasks/MyTasksWorkspace';
+import FormsLogsWorkspace from './components/forms/FormsLogsWorkspace';
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [activeMenu, setActiveMenu] = useState("Repository");
@@ -248,7 +252,21 @@ export default function App() {
             </div>
           ) : (
             <div style={{ flex: 1, padding: 32, overflowY: "auto" }}>
-              {activeMenu === "Quality Control" ? (
+              {activeMenu === "My Tasks" ? (
+                <MyTasksWorkspace
+                  user={user}
+                  onViewDocument={setViewingDoc}
+                  onAdvanceWorkflow={(doc) => setActiveModal({ type: 'advance_workflow', doc })}
+                  onSignDocument={(doc) => setActiveModal({ type: 'esignature', doc })}
+                  onRaiseQuery={(doc) => setActiveModal({ type: 'query', doc })}
+                />
+              ) : activeMenu === "Forms/Logs" ? (
+                <FormsLogsWorkspace
+                  onFormPushed={() => {
+                    fetchDocs();
+                  }}
+                />
+              ) : activeMenu === "Quality Control" ? (
                 <QualityControlCenter />
               ) : (
                 <>
