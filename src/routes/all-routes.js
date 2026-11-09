@@ -1009,42 +1009,42 @@ qcRoutes.use(requireAuth);
 
 qcRoutes.get('/', (req, res) => {
   const db = getDB();
-  const { status, severity, documentType, dateRange } = req.query;
+  const { status, severity } = req.query;
   let q = `
-    SELECT q.*, d.name as document_name, d.status as document_status, d.type as document_type, d.folder_path,
+    SELECT q.id, q.document_id, q.query_type, q.severity, q.text as query_text, q.status,
+           q.resolution as audit_comments, q.created_at,
+           d.title as document_name, d.status as document_status, d.artifact_code,
            u.name as created_by_name
     FROM queries q
-    JOIN documents d ON q.document_id = d.id
-    JOIN users u ON q.created_by = u.id
+    LEFT JOIN documents d ON q.document_id = d.id
+    LEFT JOIN users u ON q.raised_by = u.id
     WHERE q.tenant_id = ?
   `;
   const params = [req.tenantId];
   
-  if (status) { q += ' AND q.status = ?'; params.push(status); }
-  if (severity) { q += ' AND q.severity = ?'; params.push(severity); }
-  if (documentType) { q += ' AND d.type = ?'; params.push(documentType); }
+  if (status && status !== 'All') { q += ' AND q.status = ?'; params.push(status); }
+  if (severity && severity !== 'All') { q += ' AND q.severity = ?'; params.push(severity); }
   
   q += ' ORDER BY q.created_at DESC';
   const queries = db.prepare(q).all(...params);
-  
-  queries.forEach(query => {
-    try { query.responses = JSON.parse(query.responses || '[]'); } catch(e) { query.responses = []; }
-  });
   
   res.json({ queries });
 });
 
 qcRoutes.post('/', (req, res) => {
   const db = getDB();
-  const { document_id, query_text, severity } = req.body;
+  const { document_id, query_text, severity, query_type = 'Quality Finding' } = req.body;
   if (!document_id || !query_text) return res.status(400).json({ error: 'document_id and query_text required' });
+
+  const doc = db.prepare('SELECT study_id FROM documents WHERE id = ?').get(document_id);
+  const studyId = doc?.study_id || 'study-001';
   
   const id = uuid();
-  const sev = severity || 'Medium';
+  const sev = severity || 'Major';
   db.prepare(`
-    INSERT INTO queries (id, tenant_id, document_id, query_text, status, severity, responses, created_by)
-    VALUES (?, ?, ?, ?, 'Open', ?, '[]', ?)
-  `).run(id, req.tenantId, document_id, query_text, sev, req.user.id);
+    INSERT INTO queries (id, tenant_id, document_id, study_id, query_type, severity, text, status, raised_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'Open', ?)
+  `).run(id, req.tenantId, document_id, studyId, query_type, sev, query_text, req.user.id);
   
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Query Opened', objectType: 'query', objectId: id, objectName: `Query on ${document_id}`, detail: `Severity: ${sev}`, ip: req.ip });
   res.status(201).json({ message: 'Query created', id });
@@ -1056,11 +1056,11 @@ qcRoutes.patch('/:id', (req, res) => {
   const updates = {};
   if (status) updates.status = status;
   if (severity) updates.severity = severity;
-  if (audit_comments) updates.audit_comments = audit_comments;
+  if (audit_comments) updates.resolution = audit_comments;
   
   if (status === 'Closed') {
-    updates.resolved_at = new Date().toISOString();
-    updates.resolved_by = req.user.id;
+    updates.closed_at = new Date().toISOString();
+    updates.closed_by = req.user.id;
   }
   
   if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
