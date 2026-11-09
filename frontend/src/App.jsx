@@ -28,6 +28,10 @@ import WorkflowAdvanceModal from './components/workflow/WorkflowAdvanceModal';
 import ESignatureModal from './components/workflow/ESignatureModal';
 import AuditHistoryModal from './components/workflow/AuditHistoryModal';
 
+// Sprint 4: Ingestion & Bulk Upload (Clinevo eTMF 4.3 §8.6 & §8.10.10)
+import DocumentUploadModal from './components/upload/DocumentUploadModal';
+import BulkDownloadModal from './components/upload/BulkDownloadModal';
+
 
 // ─── MASTER eTMF SAAS LAYOUT ─────────────────────────────────────────
 export default function App() {
@@ -44,6 +48,11 @@ export default function App() {
   const [activeFolderModal, setActiveFolderModal] = useState(null); // { type: 'placeholder' | 'file_plan', node }
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
+
+  // Sprint 4: Ingestion & Bulk Selection State
+  const [selectedDocIds, setSelectedDocIds] = useState([]);
+  const [activeUploadModal, setActiveUploadModal] = useState(false);
+  const [activeBulkDownloadModal, setActiveBulkDownloadModal] = useState(false);
 
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
@@ -216,13 +225,16 @@ export default function App() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 10 }}>
+                    <button className="btn-secondary" onClick={() => setActiveBulkDownloadModal(true)}>
+                      ◪ Bulk Download {selectedDocIds.length > 0 ? `(${selectedDocIds.length})` : ''}
+                    </button>
                     <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}>
                       📋 File Plan (EDL)
                     </button>
                     <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}>
                       + Add Placeholder
                     </button>
-                    <button className="btn-primary" onClick={() => alert("Upload Document Dialog: Drag & Drop or select file for ingestion.")}>
+                    <button className="btn-primary" onClick={() => setActiveUploadModal(true)}>
                       + Add Document
                     </button>
                   </div>
@@ -273,7 +285,17 @@ export default function App() {
                       <table className="modern-table">
                         <thead>
                           <tr>
-                            <th style={{ width: 40, textAlign: "center" }}><input type="checkbox" style={{ cursor: "pointer" }} /></th>
+                            <th style={{ width: 40, textAlign: "center" }}>
+                              <input
+                                type="checkbox"
+                                checked={filteredDocs.length > 0 && selectedDocIds.length === filteredDocs.length}
+                                onChange={e => {
+                                  if (e.target.checked) setSelectedDocIds(filteredDocs.map(d => d.id));
+                                  else setSelectedDocIds([]);
+                                }}
+                                style={{ cursor: "pointer" }}
+                              />
+                            </th>
                             <th>Document ID</th>
                             <th>Version</th>
                             <th>Workflow Status</th>
@@ -284,7 +306,18 @@ export default function App() {
                         <tbody>
                           {filteredDocs.map(d => (
                             <tr key={d.id} onContextMenu={(e) => handleRightClick(e, d)} style={{ cursor: "context-menu" }}>
-                              <td style={{ textAlign: "center" }}><input type="checkbox" style={{ cursor: "pointer" }} /></td>
+                              <td style={{ textAlign: "center" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedDocIds.includes(d.id)}
+                                  onChange={() => {
+                                    setSelectedDocIds(prev =>
+                                      prev.includes(d.id) ? prev.filter(id => id !== d.id) : [...prev, d.id]
+                                    );
+                                  }}
+                                  style={{ cursor: "pointer" }}
+                                />
+                              </td>
                               <td style={{ color: "#0ea5e9", fontWeight: 700, letterSpacing: 0.5 }}>{d.artifact_code || `DOC_${d.id.substring(0, 8)}`}</td>
                               <td><span className="badge badge-info">v{d.version}</span></td>
                               <td><span className={`badge ${d.status === 'Published' || d.status === 'Approved' ? 'badge-success' : 'badge-warning'}`}>{d.status}</span></td>
@@ -452,6 +485,23 @@ export default function App() {
           onSignDocument={(doc) => setActiveModal({ type: 'esignature', doc })}
           onAdvanceWorkflow={(doc) => setActiveModal({ type: 'advance_workflow', doc })}
           onViewAuditHistory={(doc) => setActiveModal({ type: 'audit_history', doc })}
+        />
+      )}
+
+      {/* SPRINT 4: INGESTION & BULK DOWNLOAD MODALS */}
+      {activeUploadModal && (
+        <DocumentUploadModal
+          currentFolderNode={selectedTreeNode}
+          onClose={() => setActiveUploadModal(false)}
+          onUploaded={() => { fetchDocs(); }}
+        />
+      )}
+
+      {activeBulkDownloadModal && (
+        <BulkDownloadModal
+          selectedDocs={docs.filter(d => selectedDocIds.includes(d.id))}
+          allDocs={filteredDocs}
+          onClose={() => setActiveBulkDownloadModal(false)}
         />
       )}
     </div>
