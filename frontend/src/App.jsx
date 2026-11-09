@@ -29,6 +29,11 @@ import QualityControlCenter from './components/inspection/QualityControlCenter';
 import MyTasksWorkspace from './components/tasks/MyTasksWorkspace';
 import FormsLogsWorkspace from './components/forms/FormsLogsWorkspace';
 
+// Security & Application Administration (§8.5)
+import SecurityAdminWorkspace from './components/admin/SecurityAdminWorkspace';
+import ApplicationAdminWorkspace from './components/admin/ApplicationAdminWorkspace';
+import StudySetupWizardModal from './components/admin/StudySetupWizardModal';
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [activeMenu, setActiveMenu] = useState("Repository");
@@ -49,6 +54,7 @@ export default function App() {
   const [activeUploadModal, setActiveUploadModal] = useState(false);
   const [activeBulkDownloadModal, setActiveBulkDownloadModal] = useState(false);
   const [isInspectorMode, setIsInspectorMode] = useState(false);
+  const [isStudyWizardOpen, setIsStudyWizardOpen] = useState(false);
 
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
@@ -268,6 +274,12 @@ export default function App() {
                 />
               ) : activeMenu === "Quality Control" ? (
                 <QualityControlCenter />
+              ) : activeMenu === "Security Administration" ? (
+                <SecurityAdminWorkspace />
+              ) : activeMenu === "Application Administration" ? (
+                <ApplicationAdminWorkspace
+                  onOpenStudyWizard={() => setIsStudyWizardOpen(true)}
+                />
               ) : (
                 <>
                   <div style={{ marginBottom: 24 }}>
@@ -358,6 +370,15 @@ export default function App() {
           onClose={() => setActiveBulkDownloadModal(false)}
         />
       )}
+
+      {/* SPRINT 3: STUDY SETUP WIZARD MODAL (§8.5.2) */}
+      <StudySetupWizardModal
+        isOpen={isStudyWizardOpen}
+        onClose={() => setIsStudyWizardOpen(false)}
+        onStudyCreated={() => {
+          fetchDocs();
+        }}
+      />
     </div>
   );
 }

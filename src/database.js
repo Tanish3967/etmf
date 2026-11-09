@@ -538,8 +538,13 @@ export async function initDB() {
   addColumn('forms_schemas', 'section', "TEXT DEFAULT '05.02'");
   addColumn('forms_schemas', 'artifact_code', "TEXT DEFAULT '05.02.01'");
 
+  // Phase 5: Security & Application Administration Enhancements (§8.5)
+  addColumn('user_groups', 'privileges', "TEXT DEFAULT '[]'");
+  addColumn('user_groups', 'folder_assignments', "TEXT DEFAULT '[]'");
+
   await seedClinicalForms();
   await seedDemoData();
+  await seedSecurityAndAdminData(db);
   console.log('✅ Database initialised');
   return db;
 }
@@ -708,3 +713,125 @@ export function appendAudit(entry) {
   db.prepare(`INSERT INTO audit_log (id,tenant_id,study_id,document_id,user_id,user_name,user_role,action,object_type,object_id,object_name,detail,old_value,new_value,ip_address,session_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`)
     .run(uuid(), entry.tenantId, entry.studyId||null, entry.documentId||null, entry.userId||null, entry.userName, entry.userRole||null, entry.action, entry.objectType||null, entry.objectId||null, entry.objectName||null, entry.detail||null, entry.oldValue||null, entry.newValue||null, entry.ip||null, entry.sessionId||null);
 }
+
+async function seedSecurityAndAdminData(db) {
+  const tenantId = 'tenant-001';
+  const now = new Date().toISOString();
+
+  // 1. Seed 21 Standard Clinical Functional Roles (§8.5.1.3 & §8.5.1.4)
+  const clinicalRoles = [
+    { id: 'frole-001', name: 'Lead Study Manager', description: 'Oversees trial documentation and workflow approvals', caps: ['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin'] },
+    { id: 'frole-002', name: 'Quality Assurance Specialist', description: 'Conducts quality audits and QC inspections', caps: ['canView', 'canReview'] },
+    { id: 'frole-003', name: 'Site CRA / Monitor', description: 'Manages site visits and monitoring reports', caps: ['canView', 'canUpload'] },
+    { id: 'frole-004', name: 'Regulatory Affairs Director', description: 'Approves regulatory filings and protocol amendments', caps: ['canView', 'canApprove'] },
+    { id: 'frole-005', name: 'Principal Investigator (PI)', description: 'Responsible for overall trial conduct and subject safety at site', caps: ['canView', 'canUpload', 'canApprove'] },
+    { id: 'frole-006', name: 'Sub-Investigator', description: 'Assists PI in conduct of trial procedures and protocol activities', caps: ['canView', 'canUpload'] },
+    { id: 'frole-007', name: 'Clinical Research Coordinator (CRC)', description: 'Coordinates site visits, patient logs, and source documentation', caps: ['canView', 'canUpload'] },
+    { id: 'frole-008', name: 'Clinical Data Manager', description: 'CRF design, data validation, query resolution, and database lock', caps: ['canView', 'canUpload', 'canReview'] },
+    { id: 'frole-009', name: 'Biostatistician', description: 'Develops SAP and analyzes clinical trial endpoints', caps: ['canView', 'canUpload', 'canReview'] },
+    { id: 'frole-010', name: 'Medical Monitor', description: 'Reviews safety events, protocol deviations, and SAE reporting', caps: ['canView', 'canReview', 'canApprove'] },
+    { id: 'frole-011', name: 'Drug Safety / PV Associate', description: 'Processes SUSARs, CIOMS forms, and pharmacovigilance narratives', caps: ['canView', 'canUpload', 'canReview'] },
+    { id: 'frole-012', name: 'TMF Specialist / Archivist', description: 'Manages eTMF filing completeness, index maintenance, and archiving', caps: ['canView', 'canUpload', 'canReview', 'canLock'] },
+    { id: 'frole-013', name: 'Clinical Project Director', description: 'Executive sponsor oversight across multicenter trial programs', caps: ['canView', 'canApprove', 'canAdmin'] },
+    { id: 'frole-014', name: 'Medical Writer', description: 'Authoring of clinical study protocols, CSRs, and Investigator Brochures', caps: ['canView', 'canUpload'] },
+    { id: 'frole-015', name: 'Central Monitoring Specialist', description: 'Performs risk-based centralized data analytics and site surveillance', caps: ['canView', 'canReview'] },
+    { id: 'frole-016', name: 'Site Contracts & Budget Specialist', description: 'Negotiates and files Clinical Trial Agreements (CTAs) and grants', caps: ['canView', 'canUpload'] },
+    { id: 'frole-017', name: 'Clinical Supply & IP Manager', description: 'Oversees investigational drug shipment, temperature logs, and returns', caps: ['canView', 'canUpload', 'canReview'] },
+    { id: 'frole-018', name: 'IRB / Ethics Committee Coordinator', description: 'Coordinates central and institutional ethics committee approvals', caps: ['canView', 'canUpload', 'canApprove'] },
+    { id: 'frole-019', name: 'Clinical Laboratory Specialist', description: 'Maintains laboratory accreditations (CLIA/CAP) and reference ranges', caps: ['canView', 'canUpload'] },
+    { id: 'frole-020', name: 'Regulatory Submissions Lead', description: 'Compiles and files IND, CTA, and NDA regulatory dossier submissions', caps: ['canView', 'canUpload', 'canReview', 'canApprove'] },
+    { id: 'frole-021', name: 'System Administrator', description: 'Administers enterprise security, users, role permissions, and eTMF setup', caps: ['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin', 'canLock'] }
+  ];
+
+  const insRole = db.prepare('INSERT OR IGNORE INTO functional_roles (id, tenant_id, name, description, capabilities) VALUES (?, ?, ?, ?, ?)');
+  clinicalRoles.forEach(r => insRole.run(r.id, tenantId, r.name, r.description, JSON.stringify(r.caps)));
+
+  // Assign standard roles to existing users
+  const insUFR = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+  insUFR.run('usr-001', 'frole-001');
+  insUFR.run('usr-002', 'frole-005');
+  insUFR.run('usr-003', 'frole-003');
+  insUFR.run('usr-004', 'frole-004');
+  insUFR.run('usr-005', 'frole-008');
+  insUFR.run('usr-006', 'frole-021');
+
+  // 2. Seed Standard User Groups (§8.5.1.2)
+  const groupCount = db.prepare('SELECT COUNT(*) as c FROM user_groups WHERE tenant_id = ?').get(tenantId).c;
+  if (groupCount === 0) {
+    const groups = [
+      {
+        id: 'ugrp-001',
+        name: 'Clinical Operations Leads',
+        description: 'Trial managers, operational leads, and study directors',
+        privileges: ['author', 'reviewer', 'approver', 'downloader'],
+        zones: ['01', '02', '05'],
+        folder_assignments: ['01 Trial Management', '02 Central Trial Documents', '05 Site Management'],
+        members: ['usr-001']
+      },
+      {
+        id: 'ugrp-002',
+        name: 'Site CRA Monitors',
+        description: 'Field clinical research associates and site monitoring teams',
+        privileges: ['author', 'downloader'],
+        zones: ['03', '05'],
+        folder_assignments: ['03 Regulatory', '05 Site Management'],
+        members: ['usr-003']
+      },
+      {
+        id: 'ugrp-003',
+        name: 'Regulatory & Ethics Approvers',
+        description: 'Regulatory affairs directors and institutional review board liaisons',
+        privileges: ['reviewer', 'approver', 'downloader'],
+        zones: ['03', '04'],
+        folder_assignments: ['03 Regulatory', '04 IRB / IEC'],
+        members: ['usr-004']
+      },
+      {
+        id: 'ugrp-004',
+        name: 'Unblinded Biostatistics Team',
+        description: 'Unblinded biostatisticians and independent data monitoring committee',
+        privileges: ['author', 'reviewer', 'blinded'],
+        zones: ['10', '11'],
+        folder_assignments: ['10 Data Management', '11 Statistics'],
+        members: ['usr-005']
+      }
+    ];
+
+    const insGrp = db.prepare('INSERT INTO user_groups (id, tenant_id, name, description, is_active, zones, privileges, folder_assignments, created_by) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)');
+    const insMem = db.prepare('INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?)');
+    groups.forEach(g => {
+      insGrp.run(g.id, tenantId, g.name, g.description, JSON.stringify(g.zones), JSON.stringify(g.privileges), JSON.stringify(g.folder_assignments), 'system');
+      g.members.forEach(m => insMem.run(g.id, m));
+    });
+  }
+
+  // 3. Seed Department and Designation Codelists (§8.5.2.1 & §8.5.2.2)
+  const codelistCount = db.prepare('SELECT COUNT(*) as c FROM system_codelists WHERE tenant_id = ?').get(tenantId).c;
+  if (codelistCount === 0) {
+    const depts = [
+      { code: 'DEPT-CLIN-OPS', name: 'Clinical Operations' },
+      { code: 'DEPT-REG-AFF', name: 'Regulatory Affairs' },
+      { code: 'DEPT-QA-COMP', name: 'Quality Assurance & Compliance' },
+      { code: 'DEPT-DATA-MGMT', name: 'Data Management & Biostatistics' },
+      { code: 'DEPT-MED-AFF', name: 'Medical Affairs & Pharmacovigilance' },
+      { code: 'DEPT-TMF-OPS', name: 'TMF Operations & Archiving' },
+      { code: 'DEPT-IT-SYS', name: 'IT & System Administration' }
+    ];
+    const desigs = [
+      { code: 'DESIG-TMF-MGR', name: 'TMF Manager' },
+      { code: 'DESIG-PI', name: 'Principal Investigator' },
+      { code: 'DESIG-SR-CRA', name: 'Senior Clinical Research Associate' },
+      { code: 'DESIG-REG-DIR', name: 'Regulatory Affairs Director' },
+      { code: 'DESIG-LEAD-DM', name: 'Lead Clinical Data Manager' },
+      { code: 'DESIG-BIOSTAT', name: 'Lead Biostatistician' },
+      { code: 'DESIG-MED-MON', name: 'Medical Monitor' },
+      { code: 'DESIG-QA-AUD', name: 'QA Auditor' },
+      { code: 'DESIG-SYS-ADMIN', name: 'System Administrator' }
+    ];
+
+    const insCode = db.prepare('INSERT OR IGNORE INTO system_codelists (id, tenant_id, code, name, group_name, is_active, created_by) VALUES (?, ?, ?, ?, ?, 1, ?)');
+    depts.forEach(d => insCode.run(uuid(), tenantId, d.code, d.name, 'Department', 'system'));
+    desigs.forEach(d => insCode.run(uuid(), tenantId, d.code, d.name, 'Designation', 'system'));
+  }
+}
+

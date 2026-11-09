@@ -77,30 +77,84 @@ userRoutes.use(requireAuth);
 
 userRoutes.get('/', (req, res) => {
   const db = getDB();
-  const users = db.prepare('SELECT id, name, email, role, dept, active, mfa_enabled, last_login, created_at FROM users WHERE tenant_id = ? ORDER BY name').all(req.tenantId);
+  const users = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, last_login, created_at FROM users WHERE tenant_id = ? ORDER BY name').all(req.tenantId);
+  const ufrStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
+  users.forEach(u => {
+    u.functional_roles = ufrStmt.all(u.id).map(r => r.role_id);
+  });
   res.json({ users });
+});
+
+userRoutes.post('/', requireCap('canAdmin'), async (req, res) => {
+  const db = getDB();
+  const { name, username, email, role, dept, designation, description, password, active = 1, functional_roles = [] } = req.body;
+  const userName = name || username;
+  if (!userName || !email) return res.status(400).json({ error: 'Name and email required' });
+  const existing = db.prepare('SELECT id FROM users WHERE tenant_id = ? AND email = ?').get(req.tenantId, email);
+  if (existing) return res.status(409).json({ error: `User with email ${email} already exists` });
+  const id = uuid();
+  const pwHash = await bcrypt.hash(password || 'Admin1234!', 12);
+  db.prepare('INSERT INTO users (id, tenant_id, name, email, password_hash, role, dept, designation, description, active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, userName, email, pwHash, role || 'CRA / Reviewer', dept || 'Clinical Operations', designation || '', description || '', active ? 1 : 0, req.user.name || req.user.id);
+  if (Array.isArray(functional_roles) && functional_roles.length > 0) {
+    const insRole = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+    functional_roles.forEach(rid => insRole.run(id, rid));
+  }
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Created', objectType: 'user', objectId: id, objectName: userName, ip: req.ip });
+  const user = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, created_at FROM users WHERE id = ?').get(id);
+  user.functional_roles = functional_roles;
+  res.status(201).json({ message: 'User created successfully', user });
 });
 
 userRoutes.get('/:id', (req, res) => {
   const db = getDB();
-  const user = db.prepare('SELECT id, name, email, role, dept, active, mfa_enabled, last_login, created_at FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  const user = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, last_login, created_at FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  const ufrStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
+  user.functional_roles = ufrStmt.all(user.id).map(r => r.role_id);
   res.json({ user });
 });
 
-userRoutes.patch('/:id', requireCap('canAdmin'), (req, res) => {
+userRoutes.post('/:id/reset-password', requireCap('canAdmin'), async (req, res) => {
   const db = getDB();
-  const { role, dept, active } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const newPassword = req.body.newPassword || `Clinion@${Math.floor(1000 + Math.random() * 9000)}`;
+  const hash = await bcrypt.hash(newPassword, 12);
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.params.id);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Password Reset', objectType: 'user', objectId: req.params.id, objectName: user.name, detail: 'Administrator reset user password', ip: req.ip });
+  res.json({ message: 'Password reset successfully', tempPassword: newPassword });
+});
+
+userRoutes.patch('/:id', requireCap('canAdmin'), async (req, res) => {
+  const db = getDB();
+  const { role, dept, active, name, email, designation, description, functional_roles } = req.body;
   const updates = {}; const user = db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  if (role   !== undefined) updates.role   = role;
-  if (dept   !== undefined) updates.dept   = dept;
+  if (role !== undefined) updates.role = role;
+  if (dept !== undefined) updates.dept = dept;
   if (active !== undefined) updates.active = active ? 1 : 0;
-  if (!Object.keys(updates).length) return res.status(400).json({ error: 'Nothing to update' });
-  const set = Object.keys(updates).map(k => `${k} = ?`).join(', ');
-  db.prepare(`UPDATE users SET ${set} WHERE id = ?`).run(...Object.values(updates), req.params.id);
+  if (name !== undefined) updates.name = name;
+  if (email !== undefined) updates.email = email;
+  if (designation !== undefined) updates.designation = designation;
+  if (description !== undefined) updates.description = description;
+
+  if (Object.keys(updates).length > 0) {
+    const set = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    db.prepare(`UPDATE users SET ${set} WHERE id = ?`).run(...Object.values(updates), req.params.id);
+  }
+
+  if (Array.isArray(functional_roles)) {
+    db.prepare('DELETE FROM user_functional_roles WHERE user_id = ?').run(req.params.id);
+    const insRole = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+    functional_roles.forEach(rid => insRole.run(req.params.id, rid));
+  }
+
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Updated', objectType: 'user', objectId: req.params.id, objectName: user.name, detail: JSON.stringify(updates), ip: req.ip });
-  res.json({ message: 'User updated', user: db.prepare('SELECT id,name,email,role,dept,active FROM users WHERE id = ?').get(req.params.id) });
+  const updatedUser = db.prepare('SELECT id,name,email,role,dept,designation,description,active FROM users WHERE id = ?').get(req.params.id);
+  const ufrStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
+  updatedUser.functional_roles = ufrStmt.all(req.params.id).map(r => r.role_id);
+  res.json({ message: 'User updated', user: updatedUser });
 });
 
 userRoutes.delete('/:id', requireCap('canAdmin'), (req, res) => {
@@ -128,14 +182,103 @@ studyRoutes.get('/', (req, res) => {
 
 studyRoutes.post('/', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
-  const { protocolNumber, title, phase, therapeuticArea, sponsorName, croName, startDate, plannedEndDate, tmfModelVersion = 'DIA v3.2' } = req.body;
+  const { protocolNumber, title, phase, therapeuticArea, sponsorName, croName, startDate, plannedEndDate, tmfModelVersion = 'DIA v3.2', sites = [], initializeEDL = false, zones = [] } = req.body;
   if (!protocolNumber || !title || !phase) return res.status(400).json({ error: 'protocolNumber, title, phase required' });
   const existing = db.prepare('SELECT id FROM studies WHERE tenant_id = ? AND protocol_number = ?').get(req.tenantId, protocolNumber);
   if (existing) return res.status(409).json({ error: `Study ${protocolNumber} already exists` });
   const id = `study-${Date.now()}`;
-  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,start_date,planned_end_date,tmf_model_version,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, req.tenantId, protocolNumber, title, phase, therapeuticArea, sponsorName, croName, startDate, plannedEndDate, tmfModelVersion, 'Setup', req.user.id);
-  appendAudit({ tenantId: req.tenantId, studyId: id, userId: req.user.id, userName: req.user.name, action: 'Study Created', objectType: 'study', objectId: id, objectName: title, ip: req.ip });
-  res.status(201).json({ study: db.prepare('SELECT * FROM studies WHERE id = ?').get(id) });
+  db.prepare('INSERT INTO studies (id,tenant_id,protocol_number,title,phase,therapeutic_area,sponsor_name,cro_name,start_date,planned_end_date,tmf_model_version,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, req.tenantId, protocolNumber, title, phase, therapeuticArea || '', sponsorName || '', croName || '', startDate || null, plannedEndDate || null, tmfModelVersion, 'Setup', req.user.id);
+  
+  // Auto-initialize Participating Sites if provided
+  let siteCount = 0;
+  if (Array.isArray(sites) && sites.length > 0) {
+    const insSite = db.prepare('INSERT INTO sites (id, tenant_id, study_id, site_code, name, country, pi_name, status, activation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    sites.forEach((s, idx) => {
+      const siteId = `site-${Date.now()}-${idx + 1}`;
+      const code = s.siteCode || s.site_code || s.code || `Site-${String(idx + 1).padStart(3, '0')}`;
+      insSite.run(siteId, req.tenantId, id, code, s.name || `Site ${idx + 1}`, s.country || 'USA', s.piName || s.pi_name || '', s.status || 'Active', s.activationDate || s.activation_date || new Date().toISOString().split('T')[0]);
+      siteCount++;
+    });
+  }
+
+  // Auto-initialize DIA TMF Reference Model v3.2 EDL Placeholders
+  let placeholderCount = 0;
+  if (initializeEDL) {
+    const DIA_STANDARD_PLACEHOLDERS = [
+      { code: '01.01.01', name: 'Trial Master File Plan', zone: '01', zoneLabel: 'Trial Management', section: '01.01', sectionLabel: 'Trial Oversight' },
+      { code: '01.01.02', name: 'Monitoring Plan', zone: '01', zoneLabel: 'Trial Management', section: '01.01', sectionLabel: 'Trial Oversight' },
+      { code: '01.02.01', name: 'Handover Notes', zone: '01', zoneLabel: 'Trial Management', section: '01.02', sectionLabel: 'Team Handovers' },
+      { code: '01.03.01', name: 'Budget Template & Grant Details', zone: '01', zoneLabel: 'Trial Management', section: '01.03', sectionLabel: 'Financial Tracking' },
+      { code: '02.01.01', name: 'Approved Protocol', zone: '02', zoneLabel: 'Central Trial Documents', section: '02.01', sectionLabel: 'Protocol & Amendments' },
+      { code: '02.01.02', name: 'Protocol Amendment Form', zone: '02', zoneLabel: 'Central Trial Documents', section: '02.01', sectionLabel: 'Protocol & Amendments' },
+      { code: '02.02.01', name: 'Current Investigator Brochure', zone: '02', zoneLabel: 'Central Trial Documents', section: '02.02', sectionLabel: 'Investigator Brochure' },
+      { code: '02.03.01', name: 'Master Informed Consent Form', zone: '02', zoneLabel: 'Central Trial Documents', section: '02.03', sectionLabel: 'Subject Information & Consent' },
+      { code: '03.01.01', name: 'CTA Regulatory Application', zone: '03', zoneLabel: 'Regulatory', section: '03.01', sectionLabel: 'Competent Authority' },
+      { code: '03.01.02', name: 'Competent Authority Approval Letter', zone: '03', zoneLabel: 'Regulatory', section: '03.01', sectionLabel: 'Competent Authority' },
+      { code: '03.02.01', name: 'Regulatory Agency Correspondence', zone: '03', zoneLabel: 'Regulatory', section: '03.02', sectionLabel: 'Regulatory Correspondence' },
+      { code: '04.01.01', name: 'Initial Central IRB/IEC Submission', zone: '04', zoneLabel: 'IRB / IEC', section: '04.01', sectionLabel: 'Central Ethics Committee' },
+      { code: '04.01.02', name: 'Central IRB/IEC Favourable Opinion', zone: '04', zoneLabel: 'IRB / IEC', section: '04.01', sectionLabel: 'Central Ethics Committee' },
+      { code: '04.02.01', name: 'Local Ethics Clearance & Approval', zone: '04', zoneLabel: 'IRB / IEC', section: '04.02', sectionLabel: 'Local Ethics Committee' },
+      { code: '05.01.01', name: 'Site Feasibility Questionnaire', zone: '05', zoneLabel: 'Site Management', section: '05.01', sectionLabel: 'Feasibility & Selection' },
+      { code: '05.02.01', name: 'Site Initiation Visit (SIV) Report', zone: '05', zoneLabel: 'Site Management', section: '05.02', sectionLabel: 'Site Initiation' },
+      { code: '05.02.02', name: 'Delegation of Authority (DOA) Log', zone: '05', zoneLabel: 'Site Management', section: '05.02', sectionLabel: 'Site Initiation' },
+      { code: '05.03.01', name: 'Interim Monitoring Visit Report', zone: '05', zoneLabel: 'Site Management', section: '05.03', sectionLabel: 'Monitoring Visit Reports' },
+      { code: '06.01.01', name: 'IP Shipping & Receipt Documentation', zone: '06', zoneLabel: 'IP & Trial Supplies', section: '06.01', sectionLabel: 'Product Accountability' },
+      { code: '06.02.01', name: 'Certificate of Analysis (CoA)', zone: '06', zoneLabel: 'IP & Trial Supplies', section: '06.02', sectionLabel: 'Certificate of Analysis' },
+      { code: '07.01.01', name: 'Initial Serious Adverse Event (SAE) Form', zone: '07', zoneLabel: 'Safety Reporting', section: '07.01', sectionLabel: 'Serious Adverse Events' },
+      { code: '07.02.01', name: 'SUSAR & CIOMS-I Expedited Reports', zone: '07', zoneLabel: 'Safety Reporting', section: '07.02', sectionLabel: 'SUSARs & Alerts' },
+      { code: '08.01.01', name: 'Laboratory Accreditation & Certification', zone: '08', zoneLabel: 'Central & Local Testing', section: '08.01', sectionLabel: 'Laboratory Certifications' },
+      { code: '08.02.01', name: 'Normal Laboratory Reference Ranges', zone: '08', zoneLabel: 'Central & Local Testing', section: '08.02', sectionLabel: 'Normal Reference Ranges' },
+      { code: '09.01.01', name: 'Clinical Trial Agreement (CTA)', zone: '09', zoneLabel: 'Third Parties', section: '09.01', sectionLabel: 'Contracts & Agreements' },
+      { code: '09.02.01', name: 'Vendor Oversight Plan & SLA', zone: '09', zoneLabel: 'Third Parties', section: '09.02', sectionLabel: 'Vendor Oversight' },
+      { code: '10.01.01', name: 'Data Management Plan (DMP)', zone: '10', zoneLabel: 'Data Management', section: '10.01', sectionLabel: 'Data Management Plan' },
+      { code: '10.02.01', name: 'Annotated eCRF & Guidelines', zone: '10', zoneLabel: 'Data Management', section: '10.02', sectionLabel: 'Case Report Form' },
+      { code: '11.01.01', name: 'Statistical Analysis Plan (SAP)', zone: '11', zoneLabel: 'Statistics', section: '11.01', sectionLabel: 'Statistical Analysis Plan' },
+      { code: '11.02.01', name: 'Blind Data Review Meeting Minutes', zone: '11', zoneLabel: 'Statistics', section: '11.02', sectionLabel: 'Data Blind Review' }
+    ];
+
+    const selectedZoneCodes = Array.isArray(zones) && zones.length > 0 ? zones : null;
+    const itemsToInsert = selectedZoneCodes 
+      ? DIA_STANDARD_PLACEHOLDERS.filter(p => selectedZoneCodes.includes(p.zone)) 
+      : DIA_STANDARD_PLACEHOLDERS;
+
+    const insPH = db.prepare('INSERT OR IGNORE INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, mandatory, expected_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)');
+    itemsToInsert.forEach(item => {
+      insPH.run(uuid(), req.tenantId, id, item.code, item.name, item.zone, item.zoneLabel, item.section, item.sectionLabel, plannedEndDate || null);
+      placeholderCount++;
+    });
+  }
+
+  appendAudit({ tenantId: req.tenantId, studyId: id, userId: req.user.id, userName: req.user.name, action: 'Study Created', objectType: 'study', objectId: id, objectName: title, detail: `Created with ${siteCount} sites, ${placeholderCount} EDL placeholders`, ip: req.ip });
+  res.status(201).json({ study: db.prepare('SELECT * FROM studies WHERE id = ?').get(id), sitesCount: siteCount, placeholdersCount: placeholderCount });
+});
+
+studyRoutes.get('/:id/sites', (req, res) => {
+  const db = getDB();
+  const sites = db.prepare('SELECT * FROM sites WHERE study_id = ? AND tenant_id = ? ORDER BY site_code').all(req.params.id, req.tenantId);
+  res.json({ sites });
+});
+
+studyRoutes.post('/:id/sites', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { siteCode, site_code, name, country, piName, pi_name, activationDate, activation_date, status = 'Active' } = req.body;
+  const code = siteCode || site_code;
+  const pi = piName || pi_name;
+  const actDate = activationDate || activation_date;
+  if (!code || !name || !country) return res.status(400).json({ error: 'siteCode, name, country required' });
+
+  const study = db.prepare('SELECT * FROM studies WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!study) return res.status(404).json({ error: 'Study not found' });
+  if (study.locked) return res.status(400).json({ error: 'Study is locked. Cannot add sites to a locked clinical study.' });
+
+  const existingSite = db.prepare('SELECT id FROM sites WHERE study_id = ? AND site_code = ? AND tenant_id = ?').get(req.params.id, code, req.tenantId);
+  if (existingSite) return res.status(409).json({ error: `Site code "${code}" already exists for this study` });
+
+  const id = `site-${Date.now()}`;
+  db.prepare('INSERT INTO sites (id, tenant_id, study_id, site_code, name, country, pi_name, status, activation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, req.params.id, code, name, country, pi || '', status, actDate || new Date().toISOString().split('T')[0]);
+  appendAudit({ tenantId: req.tenantId, studyId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Site Created', objectType: 'site', objectId: id, objectName: name, ip: req.ip });
+  res.status(201).json({ site: db.prepare('SELECT * FROM sites WHERE id = ?').get(id) });
 });
 
 studyRoutes.post('/:id/lock', requireCap('canLock'), (req, res) => {
@@ -503,34 +646,63 @@ adminRoutes.get('/stats', (req, res) => {
 adminRoutes.get('/user-groups', (req, res) => {
   const db = getDB();
   const groups = db.prepare('SELECT ug.*, COUNT(ugm.user_id) as member_count FROM user_groups ug LEFT JOIN user_group_members ugm ON ug.id = ugm.group_id WHERE ug.tenant_id = ? GROUP BY ug.id ORDER BY ug.name').all(req.tenantId);
+  const memStmt = db.prepare('SELECT user_id FROM user_group_members WHERE group_id = ?');
+  groups.forEach(g => {
+    try { g.zones = JSON.parse(g.zones || '[]'); } catch(e) { g.zones = []; }
+    try { g.privileges = JSON.parse(g.privileges || '[]'); } catch(e) { g.privileges = []; }
+    try { g.folder_assignments = JSON.parse(g.folder_assignments || '[]'); } catch(e) { g.folder_assignments = []; }
+    g.members = memStmt.all(g.id).map(m => m.user_id);
+  });
   res.json({ groups });
 });
 
 adminRoutes.post('/user-groups', (req, res) => {
   const db = getDB();
-  const { name, description, isActive, zones, members = [] } = req.body;
+  const { name, description, isActive, zones = [], privileges = [], folderAssignments = [], folder_assignments = [], members = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Group name required' });
   const id = uuid();
   const activeFlag = isActive === false ? 0 : 1;
-  db.prepare('INSERT INTO user_groups (id, tenant_id, name, description, is_active, zones, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(id, req.tenantId, name, description || '', activeFlag, JSON.stringify(zones || []), req.user.id);
+  const folders = folderAssignments.length ? folderAssignments : folder_assignments;
+  db.prepare('INSERT INTO user_groups (id, tenant_id, name, description, is_active, zones, privileges, folder_assignments, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, name, description || '', activeFlag, JSON.stringify(zones), JSON.stringify(privileges), JSON.stringify(folders), req.user.name || req.user.id);
   const ins = db.prepare('INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?)');
   members.forEach(uid => ins.run(id, uid));
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Group Created', objectType: 'user_group', objectId: id, objectName: name, ip: req.ip });
-  res.status(201).json({ group: db.prepare('SELECT * FROM user_groups WHERE id = ?').get(id) });
+  const group = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(id);
+  try { group.zones = JSON.parse(group.zones || '[]'); } catch(e) { group.zones = []; }
+  try { group.privileges = JSON.parse(group.privileges || '[]'); } catch(e) { group.privileges = []; }
+  try { group.folder_assignments = JSON.parse(group.folder_assignments || '[]'); } catch(e) { group.folder_assignments = []; }
+  group.members = members;
+  res.status(201).json({ group });
 });
 
 adminRoutes.put('/user-groups/:id', (req, res) => {
   const db = getDB();
-  const { name, description, isActive, zones, members = [] } = req.body;
+  const { name, description, isActive, zones = [], privileges = [], folderAssignments = [], folder_assignments = [], members = [] } = req.body;
   const activeFlag = isActive === false ? 0 : 1;
-  db.prepare("UPDATE user_groups SET name = ?, description = ?, is_active = ?, zones = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ? AND tenant_id = ?")
-    .run(name, description || '', activeFlag, JSON.stringify(zones || []), req.user.name, req.params.id, req.tenantId);
+  const folders = folderAssignments.length ? folderAssignments : folder_assignments;
+  db.prepare("UPDATE user_groups SET name = ?, description = ?, is_active = ?, zones = ?, privileges = ?, folder_assignments = ?, updated_at = datetime('now'), updated_by = ? WHERE id = ? AND tenant_id = ?")
+    .run(name, description || '', activeFlag, JSON.stringify(zones), JSON.stringify(privileges), JSON.stringify(folders), req.user.name, req.params.id, req.tenantId);
   db.prepare('DELETE FROM user_group_members WHERE group_id = ?').run(req.params.id);
   const ins = db.prepare('INSERT OR IGNORE INTO user_group_members (group_id, user_id) VALUES (?, ?)');
   members.forEach(uid => ins.run(req.params.id, uid));
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Group Updated', objectType: 'user_group', objectId: req.params.id, objectName: name, ip: req.ip });
-  res.json({ message: 'User group updated', group: db.prepare('SELECT * FROM user_groups WHERE id = ?').get(req.params.id) });
+  const group = db.prepare('SELECT * FROM user_groups WHERE id = ?').get(req.params.id);
+  try { group.zones = JSON.parse(group.zones || '[]'); } catch(e) { group.zones = []; }
+  try { group.privileges = JSON.parse(group.privileges || '[]'); } catch(e) { group.privileges = []; }
+  try { group.folder_assignments = JSON.parse(group.folder_assignments || '[]'); } catch(e) { group.folder_assignments = []; }
+  group.members = members;
+  res.json({ message: 'User group updated', group });
+});
+
+adminRoutes.delete('/user-groups/:id', (req, res) => {
+  const db = getDB();
+  const ug = db.prepare('SELECT * FROM user_groups WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!ug) return res.status(404).json({ error: 'User group not found' });
+  db.prepare('DELETE FROM user_group_members WHERE group_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM user_groups WHERE id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Group Deleted', objectType: 'user_group', objectId: req.params.id, objectName: ug.name, ip: req.ip });
+  res.json({ message: 'User group deleted' });
 });
 
 // ── INTEGRATIONS & SYNC ──────────────────────────────────────────────
@@ -593,34 +765,68 @@ adminRoutes.patch('/security', (req, res) => {
 // ── FUNCTIONAL ROLES ─────────────────────────────────────────────────
 adminRoutes.get('/roles', (req, res) => {
   const db = getDB();
-  const roles = db.prepare('SELECT * FROM functional_roles WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
+  const roles = db.prepare('SELECT fr.*, (SELECT COUNT(*) FROM user_functional_roles ufr WHERE ufr.role_id = fr.id) as user_count FROM functional_roles fr WHERE fr.tenant_id = ? ORDER BY fr.name ASC').all(req.tenantId);
+  roles.forEach(r => {
+    try { r.capabilities = JSON.parse(r.capabilities || '[]'); } catch(e) { r.capabilities = []; }
+  });
   res.json({ roles });
 });
 
 adminRoutes.get('/functional-roles', (req, res) => {
   const db = getDB();
-  const roles = db.prepare('SELECT * FROM functional_roles WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
+  const roles = db.prepare('SELECT fr.*, (SELECT COUNT(*) FROM user_functional_roles ufr WHERE ufr.role_id = fr.id) as user_count FROM functional_roles fr WHERE fr.tenant_id = ? ORDER BY fr.name ASC').all(req.tenantId);
+  roles.forEach(r => {
+    try { r.capabilities = JSON.parse(r.capabilities || '[]'); } catch(e) { r.capabilities = []; }
+  });
   res.json({ roles });
 });
 
 adminRoutes.post('/functional-roles', (req, res) => {
   const db = getDB();
-  const { name, description, capabilities } = req.body;
+  const { name, description, capabilities = [] } = req.body;
   if (!name) return res.status(400).json({ error: 'Role name required' });
   const id = uuid();
   db.prepare('INSERT INTO functional_roles (id, tenant_id, name, description, capabilities) VALUES (?, ?, ?, ?, ?)')
-    .run(id, req.tenantId, name, description || '', JSON.stringify(capabilities || []));
+    .run(id, req.tenantId, name, description || '', JSON.stringify(capabilities));
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Functional Role Created', objectType: 'functional_role', objectId: id, objectName: name, ip: req.ip });
-  res.status(201).json({ role: db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(id) });
+  const role = db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(id);
+  try { role.capabilities = JSON.parse(role.capabilities || '[]'); } catch(e) { role.capabilities = []; }
+  res.status(201).json({ role });
 });
 
 adminRoutes.put('/functional-roles/:id', (req, res) => {
   const db = getDB();
-  const { name, description, capabilities } = req.body;
+  const { name, description, capabilities = [] } = req.body;
   db.prepare('UPDATE functional_roles SET name = ?, description = ?, capabilities = ? WHERE id = ? AND tenant_id = ?')
-    .run(name, description || '', JSON.stringify(capabilities || []), req.params.id, req.tenantId);
+    .run(name, description || '', JSON.stringify(capabilities), req.params.id, req.tenantId);
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Functional Role Updated', objectType: 'functional_role', objectId: req.params.id, objectName: name, ip: req.ip });
-  res.json({ message: 'Functional role updated', role: db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(req.params.id) });
+  const role = db.prepare('SELECT * FROM functional_roles WHERE id = ?').get(req.params.id);
+  try { role.capabilities = JSON.parse(role.capabilities || '[]'); } catch(e) { role.capabilities = []; }
+  res.json({ message: 'Functional role updated', role });
+});
+
+adminRoutes.post('/functional-roles/:id/assign', (req, res) => {
+  const db = getDB();
+  const { userIds, userId } = req.body;
+  const role = db.prepare('SELECT * FROM functional_roles WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!role) return res.status(404).json({ error: 'Functional role not found' });
+
+  if (Array.isArray(userIds)) {
+    db.prepare('DELETE FROM user_functional_roles WHERE role_id = ? AND user_id IN (SELECT id FROM users WHERE tenant_id = ?)').run(req.params.id, req.tenantId);
+    if (userIds.length > 0) {
+      const ins = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+      userIds.forEach(uid => ins.run(uid, req.params.id));
+    }
+    appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Role Assigned', objectType: 'functional_role', objectId: req.params.id, objectName: role.name, detail: `Updated assignments to ${userIds.length} user(s)`, ip: req.ip });
+    res.json({ message: 'Role assignments updated successfully', assignedCount: userIds.length });
+  } else if (userId) {
+    const ins = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
+    ins.run(userId, req.params.id);
+    appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Role Assigned', objectType: 'functional_role', objectId: req.params.id, objectName: role.name, detail: `Assigned user ${userId}`, ip: req.ip });
+    res.json({ message: 'User assigned to functional role successfully' });
+  } else {
+    res.status(400).json({ error: 'userId or userIds array required' });
+  }
 });
 
 // ── ABSENCE MANAGEMENT / AUTO REASSIGN ───────────────────────────────
@@ -762,6 +968,15 @@ adminRoutes.put('/system-codelists/:id', (req, res) => {
     .run(code, name, group_name, activeFlag, req.params.id, req.tenantId);
   appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Codelist Updated', objectType: 'system_codelist', objectId: req.params.id, objectName: code, ip: req.ip });
   res.json({ message: 'Codelist updated', codelist: db.prepare('SELECT * FROM system_codelists WHERE id = ?').get(req.params.id) });
+});
+
+adminRoutes.delete('/system-codelists/:id', (req, res) => {
+  const db = getDB();
+  const c = db.prepare('SELECT * FROM system_codelists WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!c) return res.status(404).json({ error: 'Codelist not found' });
+  db.prepare('DELETE FROM system_codelists WHERE id = ? AND tenant_id = ?').run(req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Codelist Deleted', objectType: 'system_codelist', objectId: req.params.id, objectName: c.code, ip: req.ip });
+  res.json({ message: 'Codelist deleted' });
 });
 
 // ── ORGANIZATION PROFILES ────────────────────────────────────────────
