@@ -594,6 +594,17 @@ async function seedDemoData() {
   insertAudit.run('aud-002',tenantId,'study-001','doc-003','usr-003','Marcus Williams','CRA / Reviewer','Submitted for Review','document','doc-003','Monitoring Visit Report','Submitted to review queue','10.0.2.12','2025-03-20 11:10:00');
   insertAudit.run('aud-003',tenantId,'study-001','doc-002','usr-002','Dr. Sarah Chen','Principal Investigator','Downloaded','document','doc-002','Informed Consent Form','Document downloaded','192.168.4.3','2025-03-19 09:22:00');
 
+  // Seed functional roles
+  const insertFRole = db.prepare(`INSERT OR IGNORE INTO functional_roles (id,tenant_id,name,description,capabilities) VALUES (?,?,?,?,?)`);
+  insertFRole.run('frole-001', tenantId, 'Lead Study Manager', 'Oversees trial documentation and workflow approvals', JSON.stringify(['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin']));
+  insertFRole.run('frole-002', tenantId, 'Quality Assurance Specialist', 'Conducts quality audits and QC inspections', JSON.stringify(['canView', 'canReview']));
+  insertFRole.run('frole-003', tenantId, 'Site CRA / Monitor', 'Manages site visits and monitoring reports', JSON.stringify(['canView', 'canUpload']));
+  insertFRole.run('frole-004', tenantId, 'Regulatory Affairs Director', 'Approves regulatory filings and protocol amendments', JSON.stringify(['canView', 'canApprove']));
+
+  // Seed user functional roles
+  const insertUFRole = db.prepare(`INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?,?)`);
+  insertUFRole.run('usr-001', 'frole-001');
+
   // Seed notifications
   const insertNotif = db.prepare(`INSERT OR IGNORE INTO notifications (id,tenant_id,user_id,type,title,priority,read,created_at) VALUES (?,?,?,?,?,?,?,?)`);
   insertNotif.run('notif-001',tenantId,'usr-001','task','Protocol Amendment v3.0 awaiting review','high',0,now);

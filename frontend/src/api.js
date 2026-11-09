@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api', // Connection to eTMF Node.js server
+  baseURL: 'http://localhost:3002/api', // Connection to eTMF Node.js server
 });
 
 // Request Interceptor: Attach JWT Token & Tenant ID dynamically

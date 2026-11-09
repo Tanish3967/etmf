@@ -591,6 +591,12 @@ adminRoutes.patch('/security', (req, res) => {
 });
 
 // ── FUNCTIONAL ROLES ─────────────────────────────────────────────────
+adminRoutes.get('/roles', (req, res) => {
+  const db = getDB();
+  const roles = db.prepare('SELECT * FROM functional_roles WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);
+  res.json({ roles });
+});
+
 adminRoutes.get('/functional-roles', (req, res) => {
   const db = getDB();
   const roles = db.prepare('SELECT * FROM functional_roles WHERE tenant_id = ? ORDER BY name ASC').all(req.tenantId);

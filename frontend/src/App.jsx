@@ -64,6 +64,7 @@ export default function App() {
   const [activeMenu, setActiveMenu] = useState("Repository");
   const [docs, setDocs] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
+  const [viewingDoc, setViewingDoc] = useState(null);
 
   useEffect(() => {
     const cached = localStorage.getItem("etmf_user");
@@ -171,15 +172,15 @@ export default function App() {
               {/* Curator Stats (PDF Pg 175) */}
               <div style={{ display: "flex", padding: 24, borderBottom: "1px solid #e2e8f0", gap: 40, justifyContent: "space-around" }}>
                 {[ 
-                  {l: "Total", v: 415, c: "#94a3b8", bg: "#f1f5f9"}, 
-                  {l: "Completed", v: 312, c: "#059669", bg: "#dcfce7"}, 
-                  {l: "In Progress", v: 45, c: "#0284c7", bg: "#e0f2fe"}, 
-                  {l: "In QC", v: 12, c: "#d97706", bg: "#fef3c7"}, 
-                  {l: "Missing", v: 6, c: "#dc2626", bg: "#fee2e2"} 
+                  {l: "Total", v: 415, c: "#1e293b", bg: "#f8fafc", sc: "#cbd5e1"}, 
+                  {l: "Completed", v: 312, c: "#047857", bg: "#d1fae5", sc: "#34d399"}, 
+                  {l: "In Progress", v: 45, c: "#1d4ed8", bg: "#dbeafe", sc: "#60a5fa"}, 
+                  {l: "In QC", v: 12, c: "#b45309", bg: "#fef3c7", sc: "#fbbf24"}, 
+                  {l: "Missing", v: 6, c: "#b91c1c", bg: "#fee2e2", sc: "#f87171"} 
                 ].map(s => (
                   <div key={s.l} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>{s.l}</div>
-                    <div style={{ width: 56, height: 56, borderRadius: "50%", background: s.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, color: s.c, boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)" }}>{s.v}</div>
+                    <div style={{ width: 64, height: 64, borderRadius: "50%", background: s.bg, border: `4px solid ${s.sc}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, fontWeight: 800, color: s.c, boxShadow: "0 4px 6px rgba(0,0,0,0.05)" }}>{s.v}</div>
                   </div>
                 ))}
               </div>
@@ -244,15 +245,17 @@ export default function App() {
             Target: {contextMenu.doc.title || contextMenu.doc.name || "System Record"}
           </div>
           {[
-            {l: "Download Original", i: "📥", ax: "download"}, {l: "View Properties", i: "⚙️", ax: "props"}, {l: "Version History", i: "📜", ax: "hist"},
+            {l: "View Document", i: "👁️", ax: "view"}, {l: "Download Original", i: "📥", ax: "download"}, {l: "View Properties", i: "⚙️", ax: "props"}, {l: "Version History", i: "📜", ax: "hist"},
             {l: "Check Out Document", i: "🔓", ax: "checkout"}, {l: "Redact Content", i: "⬛", ax: "redact"}, {l: "Action Sticky Notes", i: "📝", ax: "notes"},
             {l: "Inactivate (Soft Delete)", i: "❌", c: "#dc2626", ax: "del"}
           ].map(opt => (
             <div key={opt.l} onClick={async () => {
-              if (opt.l === 'Check Out Document' && contextMenu.doc.id) {
+              if (opt.ax === 'view') {
+                 setViewingDoc({ ...contextMenu.doc, version: "2.0", status: "Approved", uploadedBy: "Dr. Aris Thorne" });
+              } else if (opt.ax === 'checkout' && contextMenu.doc.id) {
                  await api.post(`/documents/${contextMenu.doc.id}/checkout`);
                  alert(`Successfully Checked Out Document ID: ${contextMenu.doc.id}`);
-              } else if (opt.l.includes('Download') && contextMenu.doc.id) {
+              } else if (opt.ax === 'download' && contextMenu.doc.id) {
                  alert('Downloading directly from backend blob store...');
               } else {
                  alert(`Executing Context Action: ${opt.l}`);
@@ -264,9 +267,85 @@ export default function App() {
           ))}
         </div>
       )}
+
+      {/* DOCUMENT VIEWER OVERLAY */}
+      {viewingDoc && <DocumentViewer doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
     </div>
   );
 }
+
+// ─── DOCUMENT VIEWER COMPONENT ───────────────────────────────────────
+const DocumentViewer = ({ doc, onClose }) => {
+  return (
+    <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(15, 23, 42, 0.7)", backdropFilter: "blur(4px)", zIndex: 9999, display: "flex", animation: "fadeIn 0.2s" }}>
+      {/* Viewer Main Area */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "#f1f5f9" }}>
+        <div style={{ height: 60, background: "#0f172a", color: "white", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <span style={{ fontSize: 20, cursor: "pointer" }} onClick={onClose}>✕</span>
+            <div style={{ fontWeight: 600, fontSize: 15 }}>{doc.title || doc.name || "Clinical Study Report.pdf"}</div>
+          </div>
+          <div style={{ display: "flex", gap: 16, alignItems: "center", background: "#1e293b", padding: "6px 16px", borderRadius: 20 }}>
+            <span style={{ cursor: "pointer" }}>➖</span>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>125%</span>
+            <span style={{ cursor: "pointer" }}>➕</span>
+            <div style={{ width: 1, height: 16, background: "#475569", margin: "0 8px" }} />
+            <span style={{ fontSize: 13, color: "#94a3b8" }}>Page 1 of 42</span>
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <button className="btn-secondary" style={{ background: "transparent", color: "white", borderColor: "#334155" }}>Download</button>
+            <button className="btn-primary" style={{ background: "#0ea5e9" }}>Sign Document</button>
+          </div>
+        </div>
+        
+        {/* PDF Canvas Mock */}
+        <div style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center", padding: 40 }}>
+          <div style={{ width: 850, minHeight: 1100, background: "white", boxShadow: "0 10px 25px rgba(0,0,0,0.1)", borderRadius: 4, padding: 60 }}>
+            <h1 style={{ textAlign: "center", color: "#0f172a", borderBottom: "2px solid #e2e8f0", paddingBottom: 20 }}>Clinical Study Protocol XYZ-999</h1>
+            <p style={{ marginTop: 40, lineHeight: 1.8, color: "#334155", textAlign: "justify" }}>
+              This document outlines the standard operating procedures and clinical endpoints for the evaluation phase. 
+              The electronic Trial Master File (eTMF) maintains the definitive record for all trial activities...
+            </p>
+            <div style={{ marginTop: 60, height: 16, background: "#f1f5f9", borderRadius: 8, width: "100%" }} />
+            <div style={{ marginTop: 16, height: 16, background: "#f1f5f9", borderRadius: 8, width: "90%" }} />
+            <div style={{ marginTop: 16, height: 16, background: "#f1f5f9", borderRadius: 8, width: "95%" }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Metadata Sidebar */}
+      <div style={{ width: 340, background: "white", borderLeft: "1px solid #e2e8f0", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: 24, borderBottom: "1px solid #e2e8f0" }}>
+          <h3 style={{ margin: 0, fontSize: 16, color: "#0f172a" }}>Document Metadata</h3>
+        </div>
+        <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Status</div>
+            <div style={{ display: "inline-block", background: "#d1fae5", color: "#047857", padding: "4px 12px", borderRadius: 12, fontSize: 12, fontWeight: 700 }}>{doc.status || "Approved"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Version</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#334155" }}>{doc.version || "2.0"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Uploaded By</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "#334155", display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 24, height: 24, background: "#e0f2fe", color: "#0ea5e9", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10 }}>AT</div>
+              {doc.uploadedBy || "Dr. Aris Thorne"}
+            </div>
+          </div>
+          <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: 20, marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Audit Trail</div>
+            <div style={{ fontSize: 13, color: "#475569", display: "flex", flexDirection: "column", gap: 12 }}>
+              <div><strong style={{color: "#0f172a"}}>Today 10:42 AM</strong> - QA Reviewed</div>
+              <div><strong style={{color: "#0f172a"}}>Yesterday</strong> - Initial Upload</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ─── DYNAMIC FUNCTIONAL MODULE LOADER ─────────────────────────────────
 const DynamicModule = ({ activeMenu }) => {
@@ -280,13 +359,21 @@ const DynamicModule = ({ activeMenu }) => {
     else if (activeMenu === "Quality Control") endpoint = "/audit";
     else if (activeMenu === "My Tasks") endpoint = "/workflow/tasks";
     else if (activeMenu === "Reports") endpoint = "/reports/timeliness";
-    else if (activeMenu === "Application Administration") endpoint = "/admin/roles";
+    else if (activeMenu === "Application Administration") endpoint = "/admin/functional-roles";
+    else if (activeMenu === "System Administration") endpoint = "/admin/system-codelists";
+    else if (activeMenu === "Forms/Logs") endpoint = "/forms/schemas";
+    else if (activeMenu === "Manage Enterprise") endpoint = "/admin/user-groups";
 
     if (endpoint) {
       api.get(endpoint).then(res => {
-        setData(res.data.users || res.data.tasks || res.data.audits || res.data || []);
-      }).catch(e => console.error("Error fetching", e))
-        .finally(() => setLoading(false));
+        const raw = res.data;
+        const list = raw.users || raw.tasks || raw.audits || raw.logs || raw.roles || raw.groups || raw.metrics || raw.inventory || raw.templates || raw.codelists || raw.schemas || (Array.isArray(raw) ? raw : []);
+        setData(list);
+      }).catch(e => {
+        console.error("Error fetching", e);
+        setData([]);
+      })
+      .finally(() => setLoading(false));
     } else {
       setLoading(false);
       setData([]);

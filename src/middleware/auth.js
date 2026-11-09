@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'etmf-dev-secret-change-in-producti
 
 // Role capability map
 export const ROLE_CAPS = {
-  'TMF Manager':            { canView:'all', canUpload:true,  canReview:true,  canApprove:true,  canAdmin:false, canLock:true  },
+  'TMF Manager':            { canView:'all', canUpload:true,  canReview:true,  canApprove:true,  canAdmin:true,  canLock:true  },
   'Principal Investigator': { canView:'all', canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false },
   'CRA / Reviewer':         { canView:'all', canUpload:false, canReview:true,  canApprove:false, canAdmin:false, canLock:false },
   'Regulatory Approver':    { canView:'all', canUpload:false, canReview:false, canApprove:true,  canAdmin:false, canLock:false },
