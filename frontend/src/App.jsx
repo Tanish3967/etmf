@@ -34,6 +34,11 @@ import SecurityAdminWorkspace from './components/admin/SecurityAdminWorkspace';
 import ApplicationAdminWorkspace from './components/admin/ApplicationAdminWorkspace';
 import StudySetupWizardModal from './components/admin/StudySetupWizardModal';
 
+// Sprint 7 & 8: Reports & System/Enterprise Admin (§8.5.3, §13, §14)
+import ReportsWorkspace from './components/reports/ReportsWorkspace';
+import SystemAdminWorkspace from './components/admin/SystemAdminWorkspace';
+import EnterpriseAdminWorkspace from './components/admin/EnterpriseAdminWorkspace';
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [activeMenu, setActiveMenu] = useState("Repository");
@@ -280,6 +285,12 @@ export default function App() {
                 <ApplicationAdminWorkspace
                   onOpenStudyWizard={() => setIsStudyWizardOpen(true)}
                 />
+              ) : activeMenu === "Reports" ? (
+                <ReportsWorkspace />
+              ) : activeMenu === "System Administration" ? (
+                <SystemAdminWorkspace />
+              ) : activeMenu === "Manage Enterprise" ? (
+                <EnterpriseAdminWorkspace />
               ) : (
                 <>
                   <div style={{ marginBottom: 24 }}>
