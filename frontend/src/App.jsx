@@ -32,6 +32,10 @@ import AuditHistoryModal from './components/workflow/AuditHistoryModal';
 import DocumentUploadModal from './components/upload/DocumentUploadModal';
 import BulkDownloadModal from './components/upload/BulkDownloadModal';
 
+// Sprint 5: Regulatory Inspection & Quality Control (Clinevo eTMF 4.3 §8.14 & §9)
+import InspectorModeBanner from './components/inspection/InspectorModeBanner';
+import QualityControlCenter from './components/inspection/QualityControlCenter';
+
 
 // ─── MASTER eTMF SAAS LAYOUT ─────────────────────────────────────────
 export default function App() {
@@ -53,6 +57,9 @@ export default function App() {
   const [selectedDocIds, setSelectedDocIds] = useState([]);
   const [activeUploadModal, setActiveUploadModal] = useState(false);
   const [activeBulkDownloadModal, setActiveBulkDownloadModal] = useState(false);
+
+  // Sprint 5: Regulatory Inspection State
+  const [isInspectorMode, setIsInspectorMode] = useState(false);
 
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
@@ -164,7 +171,29 @@ export default function App() {
           <div style={{ width: 32, height: 32, borderRadius: 8, background: "linear-gradient(135deg, #0ea5e9, #0284c7)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 16 }}>T</div>
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.5, color: "#0f172a" }}>eTMF<span style={{color: "#0284c7"}}>Pro</span></div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 20, fontSize: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 14 }}>
+          {/* Health Authority Inspector Mode Toggle */}
+          <button
+            onClick={() => setIsInspectorMode(prev => !prev)}
+            style={{
+              background: isInspectorMode ? '#fef3c7' : '#f8fafc',
+              color: isInspectorMode ? '#92400e' : '#475569',
+              border: `1px solid ${isInspectorMode ? '#f59e0b' : '#cbd5e1'}`,
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all 0.15s ease'
+            }}
+          >
+            <span>🏛️</span>
+            <span>{isInspectorMode ? 'Inspector Mode: ON' : 'Inspector Mode'}</span>
+          </button>
+
           <div style={{ cursor: "pointer", position: "relative" }}>
              🔔 <span style={{position: "absolute", top: -5, right: -8, background: "#ef4444", color: "#fff", fontSize: 10, width: 16, height: 16, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: "bold"}}>3</span>
           </div>
@@ -180,6 +209,9 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* SPRINT 5: REGULATORY INSPECTOR MODE BANNER */}
+      {isInspectorMode && <InspectorModeBanner onExit={() => setIsInspectorMode(false)} />}
 
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
         
@@ -228,15 +260,23 @@ export default function App() {
                     <button className="btn-secondary" onClick={() => setActiveBulkDownloadModal(true)}>
                       ◪ Bulk Download {selectedDocIds.length > 0 ? `(${selectedDocIds.length})` : ''}
                     </button>
-                    <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}>
-                      📋 File Plan (EDL)
-                    </button>
-                    <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}>
-                      + Add Placeholder
-                    </button>
-                    <button className="btn-primary" onClick={() => setActiveUploadModal(true)}>
-                      + Add Document
-                    </button>
+                    {!isInspectorMode ? (
+                      <>
+                        <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}>
+                          📋 File Plan (EDL)
+                        </button>
+                        <button className="btn-secondary" onClick={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}>
+                          + Add Placeholder
+                        </button>
+                        <button className="btn-primary" onClick={() => setActiveUploadModal(true)}>
+                          + Add Document
+                        </button>
+                      </>
+                    ) : (
+                      <div style={{ display: "flex", alignItems: "center", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a", padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700, gap: 6 }}>
+                        <span>🔒</span> <span>Inspector Mode: Read-Only Lockdown</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -341,11 +381,17 @@ export default function App() {
             </div>
           ) : (
             <div style={{ flex: 1, padding: 32, overflowY: "auto" }}>
-              <div style={{ marginBottom: 24 }}>
-                <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", margin: "0 0 8px 0" }}>{activeMenu} Center</h1>
-                <div style={{ fontSize: 13, color: "#64748b" }}>Home / Clinical Trials / <span style={{ color: "#0284c7" }}>{activeMenu}</span></div>
-              </div>
-              <DynamicModule activeMenu={activeMenu} />
+              {activeMenu === "Quality Control" ? (
+                <QualityControlCenter />
+              ) : (
+                <>
+                  <div style={{ marginBottom: 24 }}>
+                    <h1 style={{ fontSize: 24, fontWeight: 800, color: "#0f172a", margin: "0 0 8px 0" }}>{activeMenu} Center</h1>
+                    <div style={{ fontSize: 13, color: "#64748b" }}>Home / Clinical Trials / <span style={{ color: "#0284c7" }}>{activeMenu}</span></div>
+                  </div>
+                  <DynamicModule activeMenu={activeMenu} />
+                </>
+              )}
             </div>
           )}
         </div>
