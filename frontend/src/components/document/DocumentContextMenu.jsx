@@ -13,6 +13,7 @@ export default function DocumentContextMenu({
 
   const items = [
     { l: "View Document", i: "👁️", ax: "view" },
+    { l: "Advance Workflow State", i: "⚡", ax: "advance" },
     { l: "Controlled / Compliant Download", i: "📥", ax: "download" },
     { l: "Edit / View Metadata", i: "⚙️", ax: "props" },
     { l: "Document & Workflow History", i: "📜", ax: "hist" },
@@ -36,6 +37,8 @@ export default function DocumentContextMenu({
         status: targetDoc.status || "Approved",
         uploadedBy: targetDoc.uploaded_by || targetDoc.author || "Clinical Lead"
       });
+    } else if (opt.ax === 'advance') {
+      onOpenModal({ type: 'advance_workflow', doc: targetDoc });
     } else if (opt.ax === 'download') {
       onOpenModal({ type: 'download', doc: targetDoc });
     } else if (opt.ax === 'props') {

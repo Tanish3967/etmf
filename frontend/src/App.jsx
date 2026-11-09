@@ -23,6 +23,11 @@ import DocumentViewer from './components/viewer/DocumentViewer';
 import DynamicModule from './components/layout/DynamicModule';
 import DocumentContextMenu from './components/document/DocumentContextMenu';
 
+// Sprint 3: Workflow & 21 CFR Part 11 Electronic Signature (Clinevo eTMF 4.3 §8.11, §8.12, §8.13)
+import WorkflowAdvanceModal from './components/workflow/WorkflowAdvanceModal';
+import ESignatureModal from './components/workflow/ESignatureModal';
+import AuditHistoryModal from './components/workflow/AuditHistoryModal';
+
 
 // ─── MASTER eTMF SAAS LAYOUT ─────────────────────────────────────────
 export default function App() {
@@ -406,8 +411,49 @@ export default function App() {
         />
       )}
 
+      {/* SPRINT 3: WORKFLOW & E-SIGNATURE MODALS (§8.11–8.13) */}
+      {activeModal?.type === 'advance_workflow' && (
+        <WorkflowAdvanceModal
+          doc={activeModal.doc}
+          user={user}
+          onClose={() => setActiveModal(null)}
+          onAdvanced={(updatedDoc) => {
+            fetchDocs();
+            if (viewingDoc && updatedDoc) setViewingDoc(updatedDoc);
+          }}
+          onRequireESig={(d) => setActiveModal({ type: 'esignature', doc: d })}
+        />
+      )}
+
+      {activeModal?.type === 'esignature' && (
+        <ESignatureModal
+          doc={activeModal.doc}
+          user={user}
+          onClose={() => setActiveModal(null)}
+          onSigned={(updatedDoc) => {
+            fetchDocs();
+            if (viewingDoc && updatedDoc) setViewingDoc(updatedDoc);
+          }}
+        />
+      )}
+
+      {activeModal?.type === 'audit_history' && (
+        <AuditHistoryModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
       {/* DOCUMENT VIEWER OVERLAY */}
-      {viewingDoc && <DocumentViewer doc={viewingDoc} onClose={() => setViewingDoc(null)} />}
+      {viewingDoc && (
+        <DocumentViewer
+          doc={viewingDoc}
+          onClose={() => setViewingDoc(null)}
+          onSignDocument={(doc) => setActiveModal({ type: 'esignature', doc })}
+          onAdvanceWorkflow={(doc) => setActiveModal({ type: 'advance_workflow', doc })}
+          onViewAuditHistory={(doc) => setActiveModal({ type: 'audit_history', doc })}
+        />
+      )}
     </div>
   );
 }
