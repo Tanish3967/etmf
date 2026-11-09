@@ -1,5 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import api from './api';
+
+// Sprint 1: Document Action Modals (Clinevo eTMF 4.3 §8.10)
+import MetadataEditorModal from './components/document/MetadataEditorModal';
+import RedactionModal from './components/document/RedactionModal';
+import StickyNotesModal from './components/document/StickyNotesModal';
+import BlindingModal from './components/document/BlindingModal';
+import RaiseQueryModal from './components/document/RaiseQueryModal';
+import LinkDocumentModal from './components/document/LinkDocumentModal';
+import DocumentHistoryModal from './components/document/DocumentHistoryModal';
+import CompliantDownloadModal from './components/document/CompliantDownloadModal';
 
 // ─── PREMIUM LOGIN GATEWAY ───────────────────────────────────
 const LoginScreen = ({ onLogin }) => {
@@ -65,6 +75,15 @@ export default function App() {
   const [docs, setDocs] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
   const [viewingDoc, setViewingDoc] = useState(null);
+  const [activeModal, setActiveModal] = useState(null); // { type: 'metadata' | 'redact' | 'notes' | 'blind' | 'query' | 'link' | 'history' | 'download', doc: object }
+
+  const fetchDocs = useCallback(() => {
+    if (user && activeMenu === "Repository") {
+      api.get("/documents")
+        .then(res => setDocs(res.data.documents || []))
+        .catch(err => console.error("Error fetching documents:", err));
+    }
+  }, [user, activeMenu]);
 
   useEffect(() => {
     const cached = localStorage.getItem("etmf_user");
@@ -78,10 +97,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user && activeMenu === "Repository") {
-      api.get("/documents").then(res => setDocs(res.data.documents || []));
-    }
-  }, [user, activeMenu]);
+    fetchDocs();
+  }, [fetchDocs]);
 
   const handleRightClick = (e, doc) => {
     e.preventDefault();
@@ -238,34 +255,160 @@ export default function App() {
         </div>
       </div>
 
-      {/* INTELLIGENT CONTEXT MENU (PDF Section 8.10) */}
+      {/* INTELLIGENT CONTEXT MENU (Clinevo eTMF 4.3 §8.10) */}
       {contextMenu && (
-        <div style={{ position: "fixed", top: contextMenu.y, left: contextMenu.x, width: 240, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, boxShadow: "0 10px 25px rgba(0,0,0,0.1)", zIndex: 1000, padding: 8, animation: "fadeIn 0.2s ease" }}>
+        <div style={{
+          position: "fixed",
+          top: Math.min(contextMenu.y, window.innerHeight - 380),
+          left: Math.min(contextMenu.x, window.innerWidth - 260),
+          width: 250,
+          maxHeight: "85vh",
+          overflowY: "auto",
+          background: "#fff",
+          border: "1px solid #e2e8f0",
+          borderRadius: 12,
+          boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+          zIndex: 1000,
+          padding: 8,
+          animation: "fadeIn 0.15s ease"
+        }}>
           <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 700, color: "#0ea5e9", borderBottom: "1px solid #f1f5f9", marginBottom: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             Target: {contextMenu.doc.title || contextMenu.doc.name || "System Record"}
           </div>
           {[
-            {l: "View Document", i: "👁️", ax: "view"}, {l: "Download Original", i: "📥", ax: "download"}, {l: "View Properties", i: "⚙️", ax: "props"}, {l: "Version History", i: "📜", ax: "hist"},
-            {l: "Check Out Document", i: "🔓", ax: "checkout"}, {l: "Redact Content", i: "⬛", ax: "redact"}, {l: "Action Sticky Notes", i: "📝", ax: "notes"},
-            {l: "Inactivate (Soft Delete)", i: "❌", c: "#dc2626", ax: "del"}
+            { l: "View Document", i: "👁️", ax: "view" },
+            { l: "Controlled / Compliant Download", i: "📥", ax: "download" },
+            { l: "Edit / View Metadata", i: "⚙️", ax: "props" },
+            { l: "Document & Workflow History", i: "📜", ax: "hist" },
+            { l: contextMenu.doc.status === 'Checked Out' ? "Check In Document" : "Check Out Document", i: "🔓", ax: "checkout" },
+            { l: "Redact Document Content", i: "⬛", ax: "redact" },
+            { l: "Action Sticky Notes", i: "📝", ax: "notes" },
+            { l: contextMenu.doc.is_blinded ? "Unblind Document" : "Blind Document", i: "🔒", ax: "blind" },
+            { l: "Link / Relate Documents", i: "🔗", ax: "link" },
+            { l: "Raise Document Query", i: "❓", ax: "query" },
+            { l: "Inactivate (Soft Delete)", i: "❌", c: "#dc2626", ax: "del" }
           ].map(opt => (
-            <div key={opt.l} onClick={async () => {
-              if (opt.ax === 'view') {
-                 setViewingDoc({ ...contextMenu.doc, version: "2.0", status: "Approved", uploadedBy: "Dr. Aris Thorne" });
-              } else if (opt.ax === 'checkout' && contextMenu.doc.id) {
-                 await api.post(`/documents/${contextMenu.doc.id}/checkout`);
-                 alert(`Successfully Checked Out Document ID: ${contextMenu.doc.id}`);
-              } else if (opt.ax === 'download' && contextMenu.doc.id) {
-                 alert('Downloading directly from backend blob store...');
-              } else {
-                 alert(`Executing Context Action: ${opt.l}`);
-              }
-              closeContext();
-            }} style={{ padding: "8px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", color: opt.c || "#334155", borderRadius: 6, display: "flex", gap: 10, alignItems: "center", transition: "background 0.1s" }}>
-              <span style={{width: 16, textAlign: "center"}}>{opt.i}</span> {opt.l}
+            <div
+              key={opt.l}
+              onClick={async (e) => {
+                e.stopPropagation();
+                const targetDoc = contextMenu.doc;
+                closeContext();
+                if (opt.ax === 'view') {
+                  setViewingDoc({ ...targetDoc, version: targetDoc.version || "1.0", status: targetDoc.status || "Approved", uploadedBy: targetDoc.uploaded_by || targetDoc.author || "Clinical Lead" });
+                } else if (opt.ax === 'download') {
+                  setActiveModal({ type: 'download', doc: targetDoc });
+                } else if (opt.ax === 'props') {
+                  setActiveModal({ type: 'metadata', doc: targetDoc });
+                } else if (opt.ax === 'hist') {
+                  setActiveModal({ type: 'history', doc: targetDoc });
+                } else if (opt.ax === 'checkout') {
+                  try {
+                    const endpoint = targetDoc.status === 'Checked Out' ? `/documents/${targetDoc.id}/checkin` : `/documents/${targetDoc.id}/checkout`;
+                    await api.post(endpoint);
+                    alert(`Successfully updated checkout status for: ${targetDoc.title || targetDoc.id}`);
+                    fetchDocs();
+                  } catch (err) {
+                    alert(err.response?.data?.error || "Error updating check out status");
+                  }
+                } else if (opt.ax === 'redact') {
+                  setActiveModal({ type: 'redact', doc: targetDoc });
+                } else if (opt.ax === 'notes') {
+                  setActiveModal({ type: 'notes', doc: targetDoc });
+                } else if (opt.ax === 'blind') {
+                  setActiveModal({ type: 'blind', doc: targetDoc });
+                } else if (opt.ax === 'link') {
+                  setActiveModal({ type: 'link', doc: targetDoc });
+                } else if (opt.ax === 'query') {
+                  setActiveModal({ type: 'query', doc: targetDoc });
+                } else if (opt.ax === 'del') {
+                  if (window.confirm(`Are you sure you want to inactivate "${targetDoc.title || 'this document'}"?`)) {
+                    try {
+                      await api.delete(`/documents/${targetDoc.id}`);
+                      alert("Document record inactivated successfully.");
+                      fetchDocs();
+                    } catch (err) {
+                      alert(err.response?.data?.error || "Error inactivating document");
+                    }
+                  }
+                }
+              }}
+              style={{
+                padding: "8px 12px",
+                fontSize: 12.5,
+                fontWeight: 500,
+                cursor: "pointer",
+                color: opt.c || "#334155",
+                borderRadius: 6,
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                transition: "background 0.1s"
+              }}
+            >
+              <span style={{ width: 16, textAlign: "center" }}>{opt.i}</span> {opt.l}
             </div>
           ))}
         </div>
+      )}
+
+      {/* SPRINT 1: DOCUMENT ACTION MODALS (eTMF 4.3 §8.10) */}
+      {activeModal?.type === 'metadata' && (
+        <MetadataEditorModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onSaved={() => { setActiveModal(null); fetchDocs(); }}
+        />
+      )}
+      {activeModal?.type === 'redact' && (
+        <RedactionModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onRedacted={() => { setActiveModal(null); fetchDocs(); }}
+        />
+      )}
+      {activeModal?.type === 'notes' && (
+        <StickyNotesModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+      {activeModal?.type === 'blind' && (
+        <BlindingModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onUpdated={() => { setActiveModal(null); fetchDocs(); }}
+        />
+      )}
+      {activeModal?.type === 'query' && (
+        <RaiseQueryModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onQueryRaised={() => { setActiveModal(null); fetchDocs(); }}
+        />
+      )}
+      {activeModal?.type === 'link' && (
+        <LinkDocumentModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onLinked={() => { setActiveModal(null); fetchDocs(); }}
+        />
+      )}
+      {activeModal?.type === 'history' && (
+        <DocumentHistoryModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+          onSelectVersion={(v) => {
+            setActiveModal(null);
+            setViewingDoc({ ...activeModal.doc, version: v.version, status: v.status || activeModal.doc.status });
+          }}
+        />
+      )}
+      {activeModal?.type === 'download' && (
+        <CompliantDownloadModal
+          doc={activeModal.doc}
+          onClose={() => setActiveModal(null)}
+        />
       )}
 
       {/* DOCUMENT VIEWER OVERLAY */}

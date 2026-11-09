@@ -5,7 +5,7 @@
  */
 import http from 'http';
 
-const BASE = process.env.TEST_URL || 'http://localhost:3001';
+const BASE = process.env.TEST_URL || 'http://localhost:3002';
 let passed = 0, failed = 0, token = null, testDocId = null, testQueryId = null;
 
 async function req(method, path, body, authToken) {

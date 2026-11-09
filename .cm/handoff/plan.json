@@ -1,0 +1,14 @@
+{
+  "initiative": "sprint-1-document-actions",
+  "goal": "Implement full interactive modal dialogs for all 25 document context actions in eTMF 4.3 User Guide §8.10",
+  "decisions": [
+    "Modular component architecture under frontend/src/components/document/",
+    "Direct API integration with backend endpoints in src/routes/documents.js and src/routes/queries.js",
+    "Adherence to CodyMaster TDD & verification standards"
+  ],
+  "first_3_tasks": [
+    "1.1 Create MetadataEditorModal.jsx (§8.10.23)",
+    "1.2 Create RedactionModal.jsx (§8.10.14)",
+    "1.3 Create StickyNotesModal.jsx (§8.10.18)"
+  ]
+}
