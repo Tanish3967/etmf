@@ -146,14 +146,20 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
         successCount++;
       } catch (err) {
         console.error(`Upload failed for ${item.file.name}:`, err);
+        const errMsg = err.response?.data?.error || err.message || 'Upload failed';
+        setError(errMsg);
         setUploadProgress(prev => ({ ...prev, [i]: -1 }));
       }
     }
 
     setUploading(false);
-    alert(`Batch ingestion completed!\n${successCount} of ${fileList.length} files successfully filed into eTMF.`);
-    if (onUploaded) onUploaded();
-    onClose();
+    if (successCount > 0) {
+      alert(`Batch ingestion completed!\n${successCount} of ${fileList.length} files successfully filed into eTMF.`);
+      if (onUploaded) onUploaded();
+      onClose();
+    } else {
+      alert(`File ingestion failed. Please verify the document format and metadata.\nError: ${error || 'Upload was rejected by the server.'}`);
+    }
   };
 
   const currentItem = fileList[selectedIndex];
@@ -242,14 +248,14 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
                 if (e.target.files) handleFilesAdded(e.target.files);
               }}
               style={{ display: 'none' }}
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.msg,.eml,.txt,.zip"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.xml,.html,.htm,.txt,.csv,.tsv,.rtf,.msg,.eml,.zip,.png,.jpg,.jpeg,.tiff"
             />
             <div style={{ fontSize: 36, marginBottom: 8 }}>📄</div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
               Drag &amp; drop clinical documents here, or click to browse
             </div>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
-              Supports PDF, Word, Excel, MSG, EML, ZIP archives (up to 500 MB per file)
+              Supports PDF, Word, Excel, PowerPoint, XML, HTML, Images, Text, CSV, MSG, EML, and ZIP archives (up to 500 MB per file)
             </div>
           </div>
 

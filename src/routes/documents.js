@@ -35,9 +35,20 @@ const upload = multer({
   storage,
   limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB
   fileFilter: (req, file, cb) => {
-    const allowed = ['.pdf','.docx','.doc','.xlsx','.xls','.pptx','.jpg','.jpeg','.png','.tiff','.xml'];
-    if (allowed.includes(extname(file.originalname).toLowerCase())) cb(null, true);
-    else cb(new Error(`File type not permitted: ${extname(file.originalname)}`));
+    const allowed = [
+      '.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
+      '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.svg', '.gif',
+      '.xml', '.html', '.htm', '.txt', '.csv', '.tsv', '.rtf',
+      '.json', '.zip', '.eml', '.msg'
+    ];
+    const ext = extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) {
+      cb(null, true);
+    } else {
+      const err = new Error(`File type not permitted: ${ext || 'unknown'}. Allowed clinical formats: PDF, Word, Excel, PowerPoint, XML, HTML, Images, CSV, Text, JSON, and ZIP.`);
+      err.status = 400;
+      cb(err);
+    }
   },
 });
 
@@ -140,13 +151,19 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
     return res.status(400).json({ error: 'studyId, artifactCode, and title are required' });
   }
 
+  const resolvedArtifactName = artifactName || title || 'Clinical Document';
+  const resolvedZone = zone || (artifactCode ? artifactCode.split('.')[0] : '01');
+  const resolvedZoneLabel = zoneLabel || `Zone ${resolvedZone}`;
+  const resolvedSection = section || (artifactCode ? artifactCode.split('.').slice(0, 2).join('.') : `${resolvedZone}.01`);
+  const resolvedSectionLabel = sectionLabel || `Section ${resolvedSection}`;
+
   const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   const file = req.file;
 
   db.prepare(`
     INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, version, status, file_path, file_name, file_type, file_size, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(docId, req.tenantId, studyId, artifactCode, artifactName, zone, zoneLabel, section, sectionLabel, title, version, status, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
+  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, version, status, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
 
   // Initial workflow history entry
   db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
