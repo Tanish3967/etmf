@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import { getDB, appendAudit } from '../database.js';
 import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
 import bcrypt from 'bcrypt';
+import { orchestrateDocument, DIA_V32_RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from '../services/aiOrchestrator.js';
 
 export const queryRoutes = R();
 queryRoutes.use(requireAuth);
@@ -593,6 +594,46 @@ aiRoutes.post('/classify/audit', blockInspector, (req, res) => {
   const id = uuid();
   db.prepare('INSERT INTO ai_audit (id, tenant_id, document_id, user_id, file_name, suggested_code, final_code, confidence, action, qc_results) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, req.tenantId, documentId, req.user.id, fileName, suggestedCode, finalCode, confidence, action, JSON.stringify(qcResults));
   res.status(201).json({ id, message: 'AI audit entry recorded' });
+});
+
+// Antigravity Master Agent: eTMF Document Orchestrator (§8.6 & AI Microservice)
+aiRoutes.post('/orchestrate', blockInspector, async (req, res) => {
+  try {
+    const { documentId, documentText, fileName, s3Uri, studyId } = req.body;
+    if (!documentId) return res.status(400).json({ error: 'documentId is required' });
+    const payload = await orchestrateDocument({
+      documentId,
+      tenantId: req.tenantId,
+      userId: req.user.id,
+      userName: req.user.name,
+      studyId: studyId || 'study-001',
+      documentText: documentText || '',
+      fileName: fileName || '',
+      s3Uri: s3Uri || null,
+      ip: req.ip
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('AI Orchestration Error:', err);
+    res.status(500).json({ error: err.message || 'AI Orchestration failed' });
+  }
+});
+
+// DIA v3.2 Schema specification for Google AI Studio & FastAPI
+aiRoutes.get('/schema', (req, res) => {
+  res.json({
+    model: 'gemini-1.5-flash',
+    schemaVersion: 'DIA TMF Reference Model v3.2',
+    responseSchema: DIA_V32_RESPONSE_SCHEMA
+  });
+});
+
+// Master Agent Prompt Templates
+aiRoutes.get('/prompts', (req, res) => {
+  res.json({
+    systemInstruction: SYSTEM_INSTRUCTION,
+    schema: DIA_V32_RESPONSE_SCHEMA
+  });
 });
 
 // AI search (save searches for analytics)

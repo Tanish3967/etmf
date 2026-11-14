@@ -5,6 +5,7 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
   const [fileList, setFileList] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [uploading, setUploading] = useState(false);
+  const [orchestrating, setOrchestrating] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({});
   const [error, setError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -66,6 +67,45 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
     }
   };
 
+  const handleRunAIOrchestrator = async (index) => {
+    const item = fileList[index];
+    if (!item) return;
+    setOrchestrating(true);
+    try {
+      const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const res = await api.post('/ai/orchestrate', {
+        documentId: docId,
+        fileName: item.file.name,
+        documentText: `${item.title} ${item.file.name}`,
+        studyId: item.studyId || 'study-001'
+      });
+      const data = res.data;
+      setFileList(prev => {
+        const updated = [...prev];
+        if (updated[index]) {
+          updated[index] = {
+            ...updated[index],
+            docId,
+            title: data.metadata?.document_title || updated[index].title,
+            artifactCode: data.dia_classification?.artifact_code || updated[index].artifactCode,
+            zone: data.dia_classification?.zone_code || updated[index].zone,
+            section: data.dia_classification?.section_code || updated[index].section,
+            confidence: data.dia_classification?.confidence_score,
+            qcFlags: data.smart_qc_flags || [],
+            orchestratedStatus: data.assigned_status,
+            routingCondition: data.routing_condition,
+            manualTriageRequired: data.manual_triage_required
+          };
+        }
+        return updated;
+      });
+    } catch (err) {
+      console.error('AI Orchestration failed:', err);
+    } finally {
+      setOrchestrating(false);
+    }
+  };
+
   const handleUploadAll = async () => {
     if (fileList.length === 0) return;
 
@@ -92,7 +132,7 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
         country: item.country || "USA",
         confidential: Boolean(item.confidential),
         mandatory: Boolean(item.mandatory),
-        status: "Draft"
+        status: item.orchestratedStatus || "Draft"
       };
 
       formData.append('data', JSON.stringify(metadata));
@@ -351,6 +391,63 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
                       />
                       Mandatory Milestone
                     </label>
+                  </div>
+
+                  {/* AI Orchestrator Trigger & Status Card */}
+                  <div style={{ marginTop: 14, padding: 12, background: '#f0f9ff', borderRadius: 8, border: '1px solid #bae6fd' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: 16 }}>🤖</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#0369a1' }}>Gemini 1.5 Document Orchestrator</span>
+                      </div>
+                      <button
+                        onClick={() => handleRunAIOrchestrator(selectedIndex)}
+                        disabled={orchestrating}
+                        style={{
+                          padding: '5px 12px',
+                          background: '#0284c7',
+                          color: '#fff',
+                          border: 'none',
+                          borderRadius: 6,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {orchestrating ? 'Analyzing...' : 'Auto-Classify & QC'}
+                      </button>
+                    </div>
+
+                    {currentItem.confidence !== undefined && (
+                      <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{
+                            padding: '2px 8px',
+                            borderRadius: 4,
+                            fontSize: 11,
+                            fontWeight: 700,
+                            background: currentItem.confidence >= 0.85 ? '#dcfce7' : '#fef3c7',
+                            color: currentItem.confidence >= 0.85 ? '#15803d' : '#92400e'
+                          }}>
+                            {Math.round(currentItem.confidence * 100)}% Confidence
+                          </span>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#334155' }}>
+                            Target: <strong style={{ color: '#0284c7' }}>{currentItem.orchestratedStatus}</strong> ({currentItem.routingCondition})
+                          </span>
+                        </div>
+
+                        {currentItem.qcFlags && currentItem.qcFlags.length > 0 && (
+                          <div style={{ padding: 8, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, fontSize: 11, color: '#b91c1c' }}>
+                            <strong>⚠️ Smart QC Findings (Auto-raising Open Queries):</strong>
+                            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                              {currentItem.qcFlags.map((flag, idx) => (
+                                <li key={idx}>{flag}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
