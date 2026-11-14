@@ -66,11 +66,26 @@ async function run() {
   await initDB();
   const db = getDB();
 
-  // Reset test accounts and documents
+  // Reset test accounts and purge password history for clean idempotency
   const bcryptModule = await import('bcryptjs');
   const defaultHash = await bcryptModule.default.hash('Admin1234!', 12);
   db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email IN ('e.vasquez@pharma.com', 'p.sharma@pharma.com', 'a.patel@pharma.com', 'j.obrien@pharma.com')").run(defaultHash);
-  db.prepare("UPDATE documents SET status = 'Draft' WHERE id = 'doc-005'").run();
+  db.prepare("DELETE FROM password_history").run();
+  db.prepare("UPDATE documents SET status = 'Draft', checked_out_by = NULL WHERE id = 'doc-005'").run();
+
+  // Dedicated test document to ensure zero state collision with run.js
+  const testDocId = `doc-p1-test-${Date.now()}`;
+  db.prepare(`
+    INSERT INTO documents (
+      id, tenant_id, study_id, artifact_code, artifact_name,
+      zone, zone_label, section, section_label,
+      title, version, status, confidential, mandatory, created_by
+    ) VALUES (
+      ?, 'tenant-001', 'study-001', '01.02.01', 'Trial Operations Plan',
+      '01', 'Trial Management', '01.02', 'Trial Operations',
+      'Phase 1 Verification Protocol', '1.0', 'Draft', 0, 1, 'usr-001'
+    )
+  `).run(testDocId);
 
   // Obtain auth token for testing
   const loginRes = await req('POST', '/api/auth/login', {
@@ -86,19 +101,22 @@ async function run() {
   // ─────────────────────────────────────────────────────────────
   console.log('1. Dual-Component Electronic Signature Re-Authentication (§11.200)');
 
-  // Advance doc-005 to 'Pending Approval' first
-  await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Pending Review' }, token);
-  await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Review Complete' }, token);
-  await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Pending Approval' }, token);
+  // Advance dedicated test document to 'Pending Approval' first
+  const adv1 = await req('POST', `/api/workflow/${testDocId}/transition`, { nextState: 'Pending Review' }, token);
+  assert.strictEqual(adv1.status, 200, `Advance to Pending Review failed: ${JSON.stringify(adv1.body)}`);
+  const adv2 = await req('POST', `/api/workflow/${testDocId}/transition`, { nextState: 'Review Complete' }, token);
+  assert.strictEqual(adv2.status, 200, `Advance to Review Complete failed: ${JSON.stringify(adv2.body)}`);
+  const adv3 = await req('POST', `/api/workflow/${testDocId}/transition`, { nextState: 'Pending Approval' }, token);
+  assert.strictEqual(adv3.status, 200, `Advance to Pending Approval failed: ${JSON.stringify(adv3.body)}`);
 
   await test('Rejects signature attempt missing credentials object entirely (400)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Approved' }, token);
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, { nextState: 'Approved' }, token);
     assert.strictEqual(r.status, 400);
     assert.strictEqual(r.body.code, 'ESIG_REQUIRED');
   });
 
   await test('Rejects signature attempt missing username (400)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', {
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
       nextState: 'Approved',
       credentials: { password: 'Admin1234!', meaning: 'Approved' }
     }, token);
@@ -107,7 +125,7 @@ async function run() {
   });
 
   await test('Rejects signature attempt missing password (400)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', {
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
       nextState: 'Approved',
       credentials: { username: 'e.vasquez@pharma.com', meaning: 'Approved' }
     }, token);
@@ -116,7 +134,7 @@ async function run() {
   });
 
   await test('Rejects signature attempt with mismatched username (401)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', {
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
       nextState: 'Approved',
       credentials: { username: 'intruder@impostor.org', password: 'Admin1234!', meaning: 'Approved' }
     }, token);
@@ -125,7 +143,7 @@ async function run() {
   });
 
   await test('Rejects signature attempt with incorrect password (401)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', {
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
       nextState: 'Approved',
       credentials: { username: 'e.vasquez@pharma.com', password: 'WrongPassword999!', meaning: 'Approved' }
     }, token);
@@ -133,9 +151,24 @@ async function run() {
     assert.strictEqual(r.body.code, 'ESIG_FAILED');
   });
 
+  await test('Rejects signature attempt when user account is locked (423 LOCKED)', async () => {
+    const lockTime = new Date(Date.now() + 30 * 60000).toISOString();
+    db.prepare("UPDATE users SET locked_until = ? WHERE id = 'usr-001'").run(lockTime);
+
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
+      nextState: 'Approved',
+      credentials: { username: 'e.vasquez@pharma.com', password: 'Admin1234!', meaning: 'Approved' }
+    }, token);
+
+    db.prepare("UPDATE users SET locked_until = NULL WHERE id = 'usr-001'").run();
+
+    assert.strictEqual(r.status, 423, `Expected 423 LOCKED, got ${r.status}: ${JSON.stringify(r.body)}`);
+    assert.strictEqual(r.body.code, 'LOCKED');
+  });
+
   let approvedEsigId = null;
   await test('Accepts valid dual-component signature with case-insensitive username match (200)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', {
+    const r = await req('POST', `/api/workflow/${testDocId}/transition`, {
       nextState: 'Approved',
       credentials: {
         username: 'E.Vasquez@Pharma.com',
@@ -190,15 +223,45 @@ async function run() {
   console.log('\n3. Server-Side PDF Rendition Engine (§11.50)');
 
   await test('GET /api/documents/:id/download returns stamped PDF with Cover Page, Watermark, and Manifest Table', async () => {
-    const r = await req('GET', '/api/documents/doc-005/download?rendition=true', null, token);
+    const r = await req('GET', `/api/documents/${testDocId}/download?rendition=true`, null, token);
     assert.strictEqual(r.status, 200, `Download status: ${r.status}`);
     assert(Buffer.isBuffer(r.body), 'Response must be binary buffer');
     assert(r.body.subarray(0, 4).toString() === '%PDF', 'Buffer must begin with %PDF magic bytes');
     assert(r.body.length > 3000, `PDF size must be substantial, got ${r.body.length} bytes`);
 
-    // Verify PDF contents contains our signature text
+    // Verify PDF contents contains rendition structure
     const pdfText = r.body.toString('latin1');
     assert(pdfText.includes('CLINEVO') || pdfText.includes('PDF'), 'Must contain rendition structure');
+  });
+
+  await test('Server-side rendition engine handles non-WinAnsi / special Unicode characters without failing', async () => {
+    const specialDocId = `doc-p1-special-${Date.now()}`;
+    db.prepare(`
+      INSERT INTO documents (
+        id, tenant_id, study_id, artifact_code, artifact_name,
+        zone, zone_label, section, section_label,
+        title, version, status, confidential, mandatory, created_by
+      ) VALUES (
+        ?, 'tenant-001', 'study-001', '01.01.01', 'Protocol',
+        '01', 'Trial Management', '01.01', 'Trial Design',
+        'Clinical Study Protocol \u2014 \u03B1/\u03B2 with Dose \u2265 95%', '1.0', 'Approved', 0, 1, 'usr-001'
+      )
+    `).run(specialDocId);
+
+    const specialEsigId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO electronic_signatures (id, document_id, tenant_id, user_id, meaning, sig_hash, ip_address, signed_at)
+      VALUES (?, ?, 'tenant-001', 'usr-001', 'Approved \u2014 \u201CSpecial\u201D \u2265 95% efficacy', 'mockhash123', '127.0.0.1', datetime('now'))
+    `).run(specialEsigId, specialDocId);
+
+    const r = await req('GET', `/api/documents/${specialDocId}/download?rendition=true`, null, token);
+    assert.strictEqual(r.status, 200, `Special character download status: ${r.status}`);
+    assert(Buffer.isBuffer(r.body), 'Response must be binary buffer');
+    assert(r.body.subarray(0, 4).toString() === '%PDF', 'Buffer must begin with %PDF');
+
+    // Clean up special document
+    db.prepare('DELETE FROM electronic_signatures WHERE id = ?').run(specialEsigId);
+    db.prepare('DELETE FROM documents WHERE id = ?').run(specialDocId);
   });
 
   await test('Gracefully handles downloading non-PDF files without throwing 500 error', async () => {
@@ -267,6 +330,13 @@ async function run() {
   // ─────────────────────────────────────────────────────────────
   console.log('\n5. Password History & 5-Cycle Reuse Prevention');
 
+  // Purge password history and refresh login token for James O'Brien prior to test 5
+  db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email = 'j.obrien@pharma.com'").run(defaultHash);
+  db.prepare("DELETE FROM password_history WHERE user_id = 'usr-005'").run();
+  const freshJoLogin = await req('POST', '/api/auth/login', { email: 'j.obrien@pharma.com', password: 'Admin1234!' });
+  assert.strictEqual(freshJoLogin.status, 200, 'James O\'Brien fresh login must succeed');
+  joToken = freshJoLogin.body.token;
+
   await test('Rejects reusing the immediate current password (400)', async () => {
     const r = await req('POST', '/api/auth/change-password', {
       currentPassword: 'Admin1234!',
@@ -299,8 +369,9 @@ async function run() {
     assert.strictEqual(reuseAttempt.status, 400, 'Reused password must be rejected');
     assert.strictEqual(reuseAttempt.body.code, 'PASSWORD_REUSED');
 
-    // Restore James O'Brien's password back to defaultHash for subsequent test runs
-    db.prepare("UPDATE users SET password_hash = ? WHERE email = 'j.obrien@pharma.com'").run(defaultHash);
+    // Restore James O'Brien's password back to defaultHash and purge history for subsequent test runs
+    db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email = 'j.obrien@pharma.com'").run(defaultHash);
+    db.prepare("DELETE FROM password_history WHERE user_id = 'usr-005'").run();
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -390,6 +461,15 @@ async function run() {
     // Reset MFA for test user so standard tests remain unaffected
     db.prepare("UPDATE users SET mfa_enabled = 0 WHERE email = 'e.vasquez@pharma.com'").run();
   });
+
+  // Cleanup test fixtures and purge history
+  try {
+    db.prepare('DELETE FROM workflow_history WHERE document_id = ?').run(testDocId);
+    db.prepare('DELETE FROM electronic_signatures WHERE document_id = ?').run(testDocId);
+    db.prepare('DELETE FROM documents WHERE id = ?').run(testDocId);
+    db.prepare("UPDATE documents SET status = 'Draft', checked_out_by = NULL WHERE id = 'doc-005'").run();
+    db.prepare("DELETE FROM password_history").run();
+  } catch (cleanErr) {}
 
   console.log('\n──────────────────────────────────────────────────────');
   console.log(`Results: ${passed}/${passed + failed} passed (${Math.round(passed / (passed + failed) * 100)}%)`);

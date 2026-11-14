@@ -33,11 +33,47 @@ export function isPdfFile(filePath) {
 }
 
 /**
- * Formats a long string by truncating or splitting if needed.
+ * Formats and sanitizes text for PDF embedding with StandardFonts (WinAnsi encoding).
+ * Normalizes Unicode, transliterates clinical symbols/Greek letters/dashes,
+ * strips unencodable characters outside [0x20-0x7E, 0xA0-0xFF], and truncates safely.
  */
-function sanitizeText(str, maxLength = 80) {
-  if (!str) return 'N/A';
-  const clean = String(str).replace(/[\r\n\t]+/g, ' ').trim();
+export function sanitizeText(str, maxLength = 80) {
+  if (str === null || str === undefined || str === '') return 'N/A';
+  let s = String(str);
+
+  // Common clinical/scientific/punctuation transliterations
+  s = s
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014\u2015]/g, '-')
+    .replace(/\u2026/g, '...')
+    .replace(/\u2265/g, '>=')
+    .replace(/\u2264/g, '<=')
+    .replace(/\u2260/g, '!=')
+    .replace(/\u2248/g, '~=')
+    .replace(/[\u00B7\u2022\u2023\u25E6\u2043\u2219]/g, '*')
+    .replace(/\u03B1/g, 'alpha').replace(/\u0391/g, 'Alpha')
+    .replace(/\u03B2/g, 'beta').replace(/\u0392/g, 'Beta')
+    .replace(/\u03B3/g, 'gamma').replace(/\u0393/g, 'Gamma')
+    .replace(/\u03B4/g, 'delta').replace(/\u0394/g, 'Delta')
+    .replace(/\u03B5/g, 'epsilon').replace(/\u0395/g, 'Epsilon')
+    .replace(/\u03BA/g, 'kappa').replace(/\u039A/g, 'Kappa')
+    .replace(/\u03BB/g, 'lambda').replace(/\u039B/g, 'Lambda')
+    .replace(/\u03BC/g, 'mu').replace(/\u039C/g, 'Mu')
+    .replace(/\u03C0/g, 'pi').replace(/\u03A0/g, 'Pi')
+    .replace(/\u03C3/g, 'sigma').replace(/\u03A3/g, 'Sigma')
+    .replace(/\u03C9/g, 'omega').replace(/\u03A9/g, 'Omega');
+
+  // Unicode decomposition (NFKD) and strip combining diacritical marks
+  s = s.normalize('NFKD');
+  s = s.replace(/[\u0300-\u036f]/g, '');
+
+  // Strip/replace any remaining characters outside printable WinAnsi range [0x20-0x7E, 0xA0-0xFF]
+  s = s.replace(/[^\x20-\x7E\xA0-\xFF]/g, ' ');
+
+  // Collapse whitespace
+  const clean = s.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return 'N/A';
   if (clean.length > maxLength) {
     return clean.slice(0, maxLength - 3) + '...';
   }
@@ -112,7 +148,7 @@ export async function generateCompliantRendition({ doc, signatures = [], request
     color: rgb(0.04, 0.75, 0.72) // #0ABFB8 teal
   });
 
-  coverPage.drawText('CLINEVO eTMF PRO — OFFICIAL DOCUMENT RENDITION', {
+  coverPage.drawText('CLINEVO eTMF PRO - OFFICIAL DOCUMENT RENDITION', {
     x: 40,
     y: PAGE_HEIGHT - 45,
     size: 16,
@@ -158,11 +194,11 @@ export async function generateCompliantRendition({ doc, signatures = [], request
   // Metadata Grid
   const metaStartY = PAGE_HEIGHT - 195;
   const metaRows = [
-    { label: 'Document ID:', value: doc.id || 'N/A', label2: 'Version:', value2: `v${doc.version || '1.0'}` },
-    { label: 'Artifact Code:', value: `${doc.artifact_code || 'N/A'} — ${sanitizeText(doc.artifact_name || 'N/A', 25)}`, label2: 'Status:', value2: doc.status || 'Draft' },
-    { label: 'DIA Classification:', value: `Zone ${doc.zone || 'N/A'} (${sanitizeText(doc.zone_label || 'Zone', 20)})`, label2: 'Section:', value2: `${doc.section || 'N/A'} (${sanitizeText(doc.section_label || 'Section', 18)})` },
-    { label: 'Binary SHA-256 Digest:', value: sanitizeText(doc.file_sha256 || 'Pending Verification', 42), label2: 'Pages / Type:', value2: `${doc.pages || (hasOriginalContent ? pdfDoc.getPageCount() - 1 : 1)} / ${doc.file_type || 'PDF'}` },
-    { label: 'Rendition Date (UTC):', value: new Date().toISOString(), label2: 'Rendered By:', value2: `${requestingUser.name || 'System'} (${requestingUser.role || 'Authorized User'})` },
+    { label: 'Document ID:', value: sanitizeText(doc.id || 'N/A', 35), label2: 'Version:', value2: `v${sanitizeText(doc.version || '1.0', 10)}` },
+    { label: 'Artifact Code:', value: `${sanitizeText(doc.artifact_code || 'N/A', 15)} - ${sanitizeText(doc.artifact_name || 'N/A', 25)}`, label2: 'Status:', value2: sanitizeText(doc.status || 'Draft', 15) },
+    { label: 'DIA Classification:', value: `Zone ${sanitizeText(doc.zone || 'N/A', 8)} (${sanitizeText(doc.zone_label || 'Zone', 20)})`, label2: 'Section:', value2: `${sanitizeText(doc.section || 'N/A', 8)} (${sanitizeText(doc.section_label || 'Section', 18)})` },
+    { label: 'Binary SHA-256 Digest:', value: sanitizeText(doc.file_sha256 || 'Pending Verification', 42), label2: 'Pages / Type:', value2: `${doc.pages || (hasOriginalContent ? pdfDoc.getPageCount() - 1 : 1)} / ${sanitizeText(doc.file_type || 'PDF', 10)}` },
+    { label: 'Rendition Date (UTC):', value: new Date().toISOString(), label2: 'Rendered By:', value2: sanitizeText(`${requestingUser.name || 'System'} (${requestingUser.role || 'Authorized User'})`, 35) },
   ];
 
   let currentY = metaStartY;
@@ -257,6 +293,17 @@ export async function generateCompliantRendition({ doc, signatures = [], request
       coverPage.drawText(sanitizeText(sig.signed_at || sig.created_at || 'UTC', 22), { x: 440, y: currentY - 13, size: 7.5, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
       currentY -= 22;
     }
+
+    if (signatures.length > 5) {
+      coverPage.drawText(`+ ${signatures.length - 5} additional signature(s) detailed in Appendix Manifest Table`, {
+        x: 50,
+        y: currentY - 8,
+        size: 7.5,
+        font: fontRegular,
+        color: rgb(0.35, 0.4, 0.5)
+      });
+      currentY -= 14;
+    }
   }
 
   // Cover Page Bottom Compliance Stamp & Footer
@@ -298,8 +345,8 @@ export async function generateCompliantRendition({ doc, signatures = [], request
     });
 
     infoPage.drawText(`Record Title: ${sanitizeText(doc.title, 60)}`, { x: 40, y: PAGE_HEIGHT - 90, size: 10, font: fontBold, color: rgb(0.2, 0.25, 0.35) });
-    infoPage.drawText(`Artifact Code: ${doc.artifact_code || 'N/A'} — ${doc.artifact_name || 'Clinical Record'}`, { x: 40, y: PAGE_HEIGHT - 110, size: 10, font: fontRegular, color: rgb(0.3, 0.35, 0.45) });
-    infoPage.drawText(`Study Protocol: ${doc.study_id || 'study-001'} | Status: ${doc.status || 'Draft'} | Version: v${doc.version || '1.0'}`, { x: 40, y: PAGE_HEIGHT - 130, size: 10, font: fontRegular, color: rgb(0.3, 0.35, 0.45) });
+    infoPage.drawText(`Artifact Code: ${sanitizeText(doc.artifact_code || 'N/A', 15)} - ${sanitizeText(doc.artifact_name || 'Clinical Record', 30)}`, { x: 40, y: PAGE_HEIGHT - 110, size: 10, font: fontRegular, color: rgb(0.3, 0.35, 0.45) });
+    infoPage.drawText(`Study Protocol: ${sanitizeText(doc.study_id || 'study-001', 15)} | Status: ${sanitizeText(doc.status || 'Draft', 15)} | Version: v${sanitizeText(doc.version || '1.0', 10)}`, { x: 40, y: PAGE_HEIGHT - 130, size: 10, font: fontRegular, color: rgb(0.3, 0.35, 0.45) });
 
     infoPage.drawRectangle({
       x: 40,
@@ -313,56 +360,94 @@ export async function generateCompliantRendition({ doc, signatures = [], request
 
     infoPage.drawText('DOCUMENT CONTENT SUMMARY', { x: 55, y: PAGE_HEIGHT - 180, size: 9, font: fontBold, color: rgb(0.1, 0.3, 0.6) });
     infoPage.drawText('This record represents a certified clinical document record registered within eTMF Pro.', { x: 55, y: PAGE_HEIGHT - 200, size: 9, font: fontRegular, color: rgb(0.2, 0.25, 0.3) });
-    infoPage.drawText(`File Format: ${doc.file_type || 'PDF'} | File Size: ${doc.file_size || 'N/A'} bytes | Confidential: ${doc.confidential ? 'Yes' : 'No'}`, { x: 55, y: PAGE_HEIGHT - 220, size: 9, font: fontRegular, color: rgb(0.2, 0.25, 0.3) });
-    infoPage.drawText(`Integrity Digest (SHA-256): ${doc.file_sha256 || 'Calculated during electronic signature certification'}`, { x: 55, y: PAGE_HEIGHT - 240, size: 8, font: fontRegular, color: rgb(0.4, 0.45, 0.5) });
+    infoPage.drawText(`File Format: ${sanitizeText(doc.file_type || 'PDF', 10)} | File Size: ${sanitizeText(doc.file_size || 'N/A', 15)} bytes | Confidential: ${doc.confidential ? 'Yes' : 'No'}`, { x: 55, y: PAGE_HEIGHT - 220, size: 9, font: fontRegular, color: rgb(0.2, 0.25, 0.3) });
+    infoPage.drawText(`Integrity Digest (SHA-256): ${sanitizeText(doc.file_sha256 || 'Calculated during electronic signature certification', 64)}`, { x: 55, y: PAGE_HEIGHT - 240, size: 8, font: fontRegular, color: rgb(0.4, 0.45, 0.5) });
   }
 
   // ─────────────────────────────────────────────────────────────
   // 2. SIGNATURE MANIFEST APPENDIX TABLE (Appended at End)
   // ─────────────────────────────────────────────────────────────
-  const manifestPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  function drawManifestHeader(page) {
+    page.drawRectangle({
+      x: 0,
+      y: PAGE_HEIGHT - 70,
+      width: PAGE_WIDTH,
+      height: 70,
+      color: rgb(0.06, 0.09, 0.16)
+    });
 
-  // Header Banner
-  manifestPage.drawRectangle({
-    x: 0,
-    y: PAGE_HEIGHT - 70,
-    width: PAGE_WIDTH,
-    height: 70,
-    color: rgb(0.06, 0.09, 0.16)
-  });
+    page.drawText('ELECTRONIC SIGNATURE MANIFEST & AUDIT CERTIFICATE', {
+      x: 40,
+      y: PAGE_HEIGHT - 38,
+      size: 13,
+      font: fontBold,
+      color: rgb(1, 1, 1)
+    });
 
-  manifestPage.drawText('ELECTRONIC SIGNATURE MANIFEST & AUDIT CERTIFICATE', {
-    x: 40,
-    y: PAGE_HEIGHT - 38,
-    size: 13,
-    font: fontBold,
-    color: rgb(1, 1, 1)
-  });
+    page.drawText('21 CFR Part 11 §11.50 Compliant Signature Records & Cryptographic Bindings', {
+      x: 40,
+      y: PAGE_HEIGHT - 54,
+      size: 9,
+      font: fontRegular,
+      color: rgb(0.6, 0.7, 0.8)
+    });
+  }
 
-  manifestPage.drawText('21 CFR Part 11 §11.50 Compliant Signature Records & Cryptographic Bindings', {
-    x: 40,
-    y: PAGE_HEIGHT - 54,
-    size: 9,
-    font: fontRegular,
-    color: rgb(0.6, 0.7, 0.8)
-  });
+  function drawManifestFooter(page) {
+    page.drawRectangle({
+      x: 40,
+      y: 45,
+      width: PAGE_WIDTH - 80,
+      height: 50,
+      color: rgb(0.97, 0.98, 0.99),
+      borderColor: rgb(0.85, 0.90, 0.95),
+      borderWidth: 1
+    });
 
+    page.drawText('CRYPTOGRAPHIC INTEGRITY & NON-REPUDIATION ATTESTATION', {
+      x: 50,
+      y: 78,
+      size: 7.5,
+      font: fontBold,
+      color: rgb(0.1, 0.3, 0.5)
+    });
+
+    page.drawText('Each electronic signature above was executed following dual-component re-authentication (21 CFR §11.200) and mathematically bound to the file binary hash via SHA-256 (§11.70). This record is maintained under strict audit trail tracking (§11.10).', {
+      x: 50,
+      y: 60,
+      size: 6.8,
+      font: fontRegular,
+      color: rgb(0.3, 0.35, 0.4)
+    });
+  }
+
+  let currentManifestPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+  drawManifestHeader(currentManifestPage);
   let manifestY = PAGE_HEIGHT - 95;
 
   if (signatures.length === 0) {
-    manifestPage.drawText('No electronic signatures have been executed on this document.', {
+    currentManifestPage.drawText('No electronic signatures have been executed on this document.', {
       x: 40,
       y: manifestY,
       size: 10,
       font: fontRegular,
       color: rgb(0.5, 0.55, 0.6)
     });
+    drawManifestFooter(currentManifestPage);
   } else {
     for (let i = 0; i < signatures.length; i++) {
       const sig = signatures[i];
-      const boxHeight = 90;
+      const boxHeight = 85;
 
-      manifestPage.drawRectangle({
+      // When vertical space would collide with footer (y: 105), paginate to new manifest page
+      if (manifestY - boxHeight < 105) {
+        drawManifestFooter(currentManifestPage);
+        currentManifestPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
+        drawManifestHeader(currentManifestPage);
+        manifestY = PAGE_HEIGHT - 95;
+      }
+
+      currentManifestPage.drawRectangle({
         x: 40,
         y: manifestY - boxHeight,
         width: PAGE_WIDTH - 80,
@@ -373,7 +458,7 @@ export async function generateCompliantRendition({ doc, signatures = [], request
       });
 
       // Signature Header Stripe
-      manifestPage.drawRectangle({
+      currentManifestPage.drawRectangle({
         x: 40,
         y: manifestY - 20,
         width: PAGE_WIDTH - 80,
@@ -381,7 +466,7 @@ export async function generateCompliantRendition({ doc, signatures = [], request
         color: rgb(0.92, 0.96, 0.99)
       });
 
-      manifestPage.drawText(`SIGNATURE #${i + 1} — ${sanitizeText(sig.user_name || sig.name || 'Signer', 30)}`, {
+      currentManifestPage.drawText(`SIGNATURE #${i + 1} - ${sanitizeText(sig.user_name || sig.name || 'Signer', 30)}`, {
         x: 50,
         y: manifestY - 14,
         size: 9,
@@ -389,7 +474,7 @@ export async function generateCompliantRendition({ doc, signatures = [], request
         color: rgb(0.04, 0.40, 0.60)
       });
 
-      manifestPage.drawText(`Status: Certified Valid`, {
+      currentManifestPage.drawText(`Status: Certified Valid`, {
         x: PAGE_WIDTH - 160,
         y: manifestY - 14,
         size: 8.5,
@@ -398,63 +483,34 @@ export async function generateCompliantRendition({ doc, signatures = [], request
       });
 
       // Fields
-      manifestPage.drawText(`Signer Role:`, { x: 50, y: manifestY - 35, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
-      manifestPage.drawText(sanitizeText(sig.user_role || sig.role || 'Authorized Role', 35), { x: 140, y: manifestY - 35, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
+      currentManifestPage.drawText(`Signer Role:`, { x: 50, y: manifestY - 35, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
+      currentManifestPage.drawText(sanitizeText(sig.user_role || sig.role || 'Authorized Role', 35), { x: 140, y: manifestY - 35, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
 
-      manifestPage.drawText(`Date/Time (UTC):`, { x: 320, y: manifestY - 35, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
-      manifestPage.drawText(sanitizeText(sig.signed_at || sig.created_at || new Date().toISOString(), 25), { x: 410, y: manifestY - 35, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
+      currentManifestPage.drawText(`Date/Time (UTC):`, { x: 320, y: manifestY - 35, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
+      currentManifestPage.drawText(sanitizeText(sig.signed_at || sig.created_at || new Date().toISOString(), 25), { x: 410, y: manifestY - 35, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
 
-      manifestPage.drawText(`Meaning (§11.50):`, { x: 50, y: manifestY - 52, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
-      manifestPage.drawText(sanitizeText(sig.meaning || 'Approved', 60), { x: 140, y: manifestY - 52, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
+      currentManifestPage.drawText(`Meaning (§11.50):`, { x: 50, y: manifestY - 50, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
+      currentManifestPage.drawText(sanitizeText(sig.meaning || 'Approved', 60), { x: 140, y: manifestY - 50, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
 
-      manifestPage.drawText(`Signer IP:`, { x: 50, y: manifestY - 69, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
-      manifestPage.drawText(sanitizeText(sig.ip_address || '127.0.0.1', 25), { x: 140, y: manifestY - 69, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
+      currentManifestPage.drawText(`Signer IP:`, { x: 50, y: manifestY - 65, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
+      currentManifestPage.drawText(sanitizeText(sig.ip_address || '127.0.0.1', 25), { x: 140, y: manifestY - 65, size: 8, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
 
-      manifestPage.drawText(`Binding Hash:`, { x: 50, y: manifestY - 84, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
-      manifestPage.drawText(sanitizeText(sig.sig_hash || 'SHA-256 bound to binary digest', 55), { x: 140, y: manifestY - 84, size: 7.5, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
+      currentManifestPage.drawText(`Binding Hash:`, { x: 50, y: manifestY - 78, size: 8, font: fontBold, color: rgb(0.3, 0.35, 0.45) });
+      currentManifestPage.drawText(sanitizeText(sig.sig_hash || 'SHA-256 bound to binary digest', 55), { x: 140, y: manifestY - 78, size: 7.5, font: fontRegular, color: rgb(0.1, 0.15, 0.2) });
 
-      manifestY -= (boxHeight + 15);
-      if (manifestY < 120 && i < signatures.length - 1) {
-        break; // Keep within single manifest page
-      }
+      manifestY -= (boxHeight + 12);
     }
+    drawManifestFooter(currentManifestPage);
   }
-
-  // Statutory binding disclaimer at bottom of manifest
-  manifestPage.drawRectangle({
-    x: 40,
-    y: 45,
-    width: PAGE_WIDTH - 80,
-    height: 50,
-    color: rgb(0.97, 0.98, 0.99),
-    borderColor: rgb(0.85, 0.90, 0.95),
-    borderWidth: 1
-  });
-
-  manifestPage.drawText('CRYPTOGRAPHIC INTEGRITY & NON-REPUDIATION ATTESTATION', {
-    x: 50,
-    y: 78,
-    size: 7.5,
-    font: fontBold,
-    color: rgb(0.1, 0.3, 0.5)
-  });
-
-  manifestPage.drawText('Each electronic signature above was executed following dual-component re-authentication (21 CFR §11.200) and mathematically bound to the file binary hash via SHA-256 (§11.70). This record is maintained under strict audit trail tracking (§11.10).', {
-    x: 50,
-    y: 60,
-    size: 6.8,
-    font: fontRegular,
-    color: rgb(0.3, 0.35, 0.4)
-  });
 
   // ─────────────────────────────────────────────────────────────
   // 3. DIAGONAL TRANSLUCENT WATERMARK (Across All Pages)
   // ─────────────────────────────────────────────────────────────
   const totalPages = pdfDoc.getPageCount();
   const dateStamp = new Date().toISOString().slice(0, 10);
-  const userStamp = (requestingUser.name || 'CLINEVO eTMF').toUpperCase();
-  const statusStamp = (doc.status || 'APPROVED').toUpperCase();
-  const watermarkText = `${statusStamp} - CONFIDENTIAL - ${dateStamp} - ${userStamp}`;
+  const userStamp = sanitizeText(requestingUser.name || 'CLINEVO eTMF', 30).toUpperCase();
+  const statusStamp = sanitizeText(doc.status || 'APPROVED', 20).toUpperCase();
+  const watermarkText = sanitizeText(`${statusStamp} - CONFIDENTIAL - ${dateStamp} - ${userStamp}`, 80);
 
   for (let i = 0; i < totalPages; i++) {
     const page = pdfDoc.getPage(i);
@@ -472,7 +528,7 @@ export async function generateCompliantRendition({ doc, signatures = [], request
     });
 
     // Discrete bottom page footer
-    page.drawText(`Page ${i + 1} of ${totalPages} — eTMF Pro 21 CFR Part 11 Certified Rendition`, {
+    page.drawText(`Page ${i + 1} of ${totalPages} - eTMF Pro 21 CFR Part 11 Certified Rendition`, {
       x: 40,
       y: 18,
       size: 7,

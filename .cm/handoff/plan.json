@@ -1,14 +1,16 @@
 {
-  "goal": "Migrate eTMF frontend, API gateway, and AI processing service to target enterprise architecture: Next.js (App Router), Go API Gateway, and Python/FastAPI AI Service",
+  "schema": "plan@1",
+  "goal": "Phase-wise implementation of 99 partially implemented eTMF capabilities benchmarked against Clinevo eTMF 4.3 User Guide",
   "decisions": [
-    "Monorepo structure with services/ai-service (Python/FastAPI) and services/api-gateway (Go 1.24)",
-    "Next.js App Router for frontend with full backwards compatibility for all 10 clinical consoles",
-    "Go API Gateway implementing 21 CFR Part 11 headers, JWT auth, document routes, and delegating to FastAPI AI service",
-    "Python AI Service implementing Gemini 1.5 Flash client with exact DIA v3.2 schema, Condition A/B/C routing, and clinical NLP fallback"
+    "Prioritize 21 CFR Part 11 security & cryptographic compliance in Phase 1 before workflow and UI expansions",
+    "Use in-process pdf-lib for dynamic Cover Page, Signature Manifest, and Watermark generation",
+    "Replace static FolderTree array with dynamic database-backed dia_model_items API and Study->Country->Site hierarchy",
+    "Enforce strict mandatory branching protocol: dedicated feature branch per phase before merging into main"
   ],
-  "first_three_tasks": [
-    "1.1 Build Python FastAPI AI Service in services/ai-service/",
-    "2.1 Build Go API Gateway in services/api-gateway/",
-    "3.1 Configure Next.js App Router in frontend/ and verify build"
-  ]
+  "first_tasks": [
+    "1.1 Dual-component e-signature re-authentication (username + password)",
+    "1.2 Binary file SHA-256 digest hashing upon upload",
+    "1.3 Server-side PDF rendition engine for cover pages, manifests, and watermarks"
+  ],
+  "openspec_path": "openspec/changes/implement-partial-etmf-features/"
 }

@@ -83,6 +83,16 @@ router.post('/:docId/transition', blockInspector, async (req, res) => {
       return res.status(401).json({ error: 'User session not found', code: 'ESIG_FAILED' });
     }
 
+    // Verify account lockout status (§3 & §8.5.3.1)
+    if (user.locked_until && new Date(user.locked_until) > new Date()) {
+      const remaining = Math.ceil((new Date(user.locked_until) - new Date()) / 60000);
+      return res.status(423).json({
+        error: `Account is locked. Electronic signature cannot be executed. Try again in ${remaining} minutes.`,
+        code: 'LOCKED',
+        remainingMinutes: remaining
+      });
+    }
+
     const expectedUsernames = [
       (user.username || '').toLowerCase(),
       (user.email || '').toLowerCase()
