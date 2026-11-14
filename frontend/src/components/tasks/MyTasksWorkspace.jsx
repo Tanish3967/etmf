@@ -5,10 +5,14 @@ export default function MyTasksWorkspace({
   onViewDocument,
   onAdvanceWorkflow,
   onSignDocument,
-  onRaiseQuery
+  onRaiseQuery,
+  onNavigateToFolder,
+  onRightClick
 }) {
   const [activeTab, setActiveTab] = useState('documents'); // 'documents' | 'expiry' | 'queries'
+  const [statusBucket, setStatusBucket] = useState('All'); // 'All' | 'openDraft' | 'pendingReview' | 'pendingApproval' | 'pendingSignoff' | 'pendingPublish'
   const [tasks, setTasks] = useState([]);
+  const [buckets, setBuckets] = useState({});
   const [expiringDocs, setExpiringDocs] = useState([]);
   const [queries, setQueries] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +31,7 @@ export default function MyTasksWorkspace({
       ]);
 
       setTasks(taskRes.data.tasks || []);
+      setBuckets(taskRes.data.buckets || {});
       setExpiringDocs(taskRes.data.expiring || []);
       setQueries(qcRes.data.queries || []);
     } catch (err) {
@@ -42,7 +47,26 @@ export default function MyTasksWorkspace({
   const onTrackCount = tasks.filter(t => t.slaLevel === 'green').length;
   const openQueriesCount = queries.filter(q => q.status === 'Open').length;
 
+  const filteredTasks = tasks.filter(t => {
+    if (statusBucket === 'All') return true;
+    if (statusBucket === 'openDraft') return ['Draft', 'More Info Requested', 'Rejected', 'Review Rejected', 'Approve Rejected', 'Signoff Rejected'].includes(t.status);
+    if (statusBucket === 'pendingReview') return ['Pending Review', 'Under Review', 'Review Complete'].includes(t.status);
+    if (statusBucket === 'pendingApproval') return t.status === 'Pending Approval';
+    if (statusBucket === 'pendingSignoff') return t.status === 'Pending Signoff';
+    if (statusBucket === 'pendingPublish') return ['Signed Off', 'Pending Publish'].includes(t.status);
+    return true;
+  });
+
   const filteredExpiring = expiringDocs.filter(d => (d.days_left || 90) <= expiryHorizon);
+
+  const BUCKET_PILLS = [
+    { id: 'All', label: `All Tasks (${buckets.all ?? tasks.length})` },
+    { id: 'openDraft', label: `Open / Draft (${buckets.openDraft ?? 0})` },
+    { id: 'pendingReview', label: `Pending Review (${buckets.pendingReview ?? 0})` },
+    { id: 'pendingApproval', label: `Pending Approval (${buckets.pendingApproval ?? 0})` },
+    { id: 'pendingSignoff', label: `Pending Signoff (${buckets.pendingSignoff ?? 0})` },
+    { id: 'pendingPublish', label: `Pending Publish (${buckets.pendingPublish ?? 0})` }
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -134,6 +158,29 @@ export default function MyTasksWorkspace({
         {/* Tab 1: Documents Tab */}
         {activeTab === 'documents' && (
           <div style={{ padding: 20 }}>
+            {/* Lifecycle Bucket Sub-Filter Pills (§8.2) */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+              {BUCKET_PILLS.map(pill => (
+                <button
+                  key={pill.id}
+                  type="button"
+                  onClick={() => setStatusBucket(pill.id)}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    border: statusBucket === pill.id ? '1px solid #0284c7' : '1px solid #cbd5e1',
+                    background: statusBucket === pill.id ? '#e0f2fe' : '#f8fafc',
+                    color: statusBucket === pill.id ? '#0369a1' : '#475569'
+                  }}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+
             {loading ? (
               <div style={{ padding: 40, textAlign: 'center', color: '#64748b' }}>Loading assigned tasks...</div>
             ) : (
@@ -143,15 +190,20 @@ export default function MyTasksWorkspace({
                     <th style={{ width: 100 }}>SLA Status</th>
                     <th style={{ width: 140 }}>Document ID</th>
                     <th>Document Name</th>
+                    <th>Folder Path</th>
                     <th>Assigned Role</th>
                     <th>Workflow Status</th>
                     <th>Age</th>
-                    <th style={{ textAlign: 'right', minWidth: 220 }}>Action</th>
+                    <th style={{ textAlign: 'right', minWidth: 230 }}>Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {tasks.map(t => (
-                    <tr key={t.id}>
+                  {filteredTasks.map(t => (
+                    <tr
+                      key={t.id}
+                      onContextMenu={e => onRightClick && onRightClick(e, t)}
+                      style={{ cursor: 'context-menu' }}
+                    >
                       <td>
                         <span style={{
                           padding: '3px 8px',
@@ -170,10 +222,30 @@ export default function MyTasksWorkspace({
                       </td>
                       <td style={{ fontWeight: 600 }}>{t.title}</td>
                       <td>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToFolder && onNavigateToFolder(t)}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            color: '#0284c7',
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            padding: 0,
+                            textAlign: 'left'
+                          }}
+                          title="Navigate to exact folder in Repository Center"
+                        >
+                          📁 {t.folderPath || `Zone ${t.zone || '01'} / ${t.section || '01.01'}`}
+                        </button>
+                      </td>
+                      <td>
                         <span className="badge badge-info">{t.task_type?.toUpperCase()}</span>
                       </td>
                       <td>
-                        <span className={`badge ${t.status === 'Approved' ? 'badge-success' : 'badge-warning'}`}>
+                        <span className={`badge ${t.status === 'Approved' || t.status === 'Published' ? 'badge-success' : 'badge-warning'}`}>
                           {t.status}
                         </span>
                       </td>
@@ -190,7 +262,7 @@ export default function MyTasksWorkspace({
                           >
                             👁️ View
                           </button>
-                          {t.status === 'Review Complete' || t.status === 'Pending Approval' ? (
+                          {t.status === 'Review Complete' || t.status === 'Pending Approval' || t.status === 'Pending Signoff' ? (
                             <button
                               className="btn-primary"
                               onClick={() => onSignDocument(t)}
@@ -221,10 +293,10 @@ export default function MyTasksWorkspace({
                       </td>
                     </tr>
                   ))}
-                  {tasks.length === 0 && (
+                  {filteredTasks.length === 0 && (
                     <tr>
-                      <td colSpan={7} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
-                        🎉 All assigned clinical trial documents are up to date! No pending review or approval tasks.
+                      <td colSpan={8} style={{ textAlign: 'center', padding: 40, color: '#94a3b8' }}>
+                        🎉 All assigned clinical trial documents in this bucket are up to date!
                       </td>
                     </tr>
                   )}
@@ -331,8 +403,24 @@ export default function MyTasksWorkspace({
                         {q.status}
                       </span>
                     </td>
-                    <td style={{ fontWeight: 600 }}>{q.document_name || 'Document Item'}</td>
-                    <td style={{ fontSize: 12.5, color: '#334155' }}>{q.query_text}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => onViewDocument && onViewDocument({ id: q.document_id, title: q.document_name || q.document_title || 'Document Item' })}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: '#0284c7',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          textDecoration: 'underline',
+                          padding: 0
+                        }}
+                      >
+                        {q.document_name || q.document_title || q.document_id || 'Document Item'}
+                      </button>
+                    </td>
+                    <td style={{ fontSize: 12.5, color: '#334155' }}>{q.text || q.query_text}</td>
                     <td style={{ fontSize: 12, color: '#64748b' }}>{new Date(q.created_at).toLocaleDateString()}</td>
                   </tr>
                 ))}
