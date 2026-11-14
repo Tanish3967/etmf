@@ -275,9 +275,24 @@ async function run() {
   // ─────────────────────────────────────────────────────────────
   console.log('\n4. Password Complexity Policy Enforcement (§3)');
 
-  // Login as James O'Brien for password tests so Elena Vasquez's token/password remain undisturbed
-  const joLogin = await req('POST', '/api/auth/login', { email: 'j.obrien@pharma.com', password: 'Admin1234!' });
-  assert.strictEqual(joLogin.status, 200, 'James O\'Brien login must succeed');
+  const ts = Date.now();
+  const pwdUserId = `usr-p1-pwd-${ts}`;
+  const pwdUserEmail = `p1.pwd.${ts}@pharma.com`;
+  const lockUserId = `usr-p1-lock-${ts}`;
+  const lockUserEmail = `p1.lock.${ts}@pharma.com`;
+  const mfaUserId = `usr-p1-mfa-${ts}`;
+  const mfaUserEmail = `p1.mfa.${ts}@pharma.com`;
+
+  const insertEphemeralUser = db.prepare(`
+    INSERT INTO users (id, tenant_id, username, name, email, password_hash, role, active, failed_attempts, failed_login_attempts)
+    VALUES (?, 'tenant-001', ?, ?, ?, ?, 'TMF Manager', 1, 0, 0)
+  `);
+  insertEphemeralUser.run(pwdUserId, `p1_pwd_${ts}`, 'Phase1 Pwd Tester', pwdUserEmail, defaultHash);
+  insertEphemeralUser.run(lockUserId, `p1_lock_${ts}`, 'Phase1 Lock Tester', lockUserEmail, defaultHash);
+  insertEphemeralUser.run(mfaUserId, `p1_mfa_${ts}`, 'Phase1 MFA Tester', mfaUserEmail, defaultHash);
+
+  const joLogin = await req('POST', '/api/auth/login', { email: pwdUserEmail, password: 'Admin1234!' });
+  assert.strictEqual(joLogin.status, 200, 'Ephemeral password tester login must succeed');
   let joToken = joLogin.body.token;
 
   await test('Rejects password shorter than 8 characters (400)', async () => {
@@ -330,11 +345,9 @@ async function run() {
   // ─────────────────────────────────────────────────────────────
   console.log('\n5. Password History & 5-Cycle Reuse Prevention');
 
-  // Purge password history and refresh login token for James O'Brien prior to test 5
-  db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email = 'j.obrien@pharma.com'").run(defaultHash);
-  db.prepare("DELETE FROM password_history WHERE user_id = 'usr-005'").run();
-  const freshJoLogin = await req('POST', '/api/auth/login', { email: 'j.obrien@pharma.com', password: 'Admin1234!' });
-  assert.strictEqual(freshJoLogin.status, 200, 'James O\'Brien fresh login must succeed');
+  db.prepare("DELETE FROM password_history WHERE user_id = ?").run(pwdUserId);
+  const freshJoLogin = await req('POST', '/api/auth/login', { email: pwdUserEmail, password: 'Admin1234!' });
+  assert.strictEqual(freshJoLogin.status, 200, 'Ephemeral password tester fresh login must succeed');
   joToken = freshJoLogin.body.token;
 
   await test('Rejects reusing the immediate current password (400)', async () => {
@@ -368,10 +381,6 @@ async function run() {
     }, joToken);
     assert.strictEqual(reuseAttempt.status, 400, 'Reused password must be rejected');
     assert.strictEqual(reuseAttempt.body.code, 'PASSWORD_REUSED');
-
-    // Restore James O'Brien's password back to defaultHash and purge history for subsequent test runs
-    db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email = 'j.obrien@pharma.com'").run(defaultHash);
-    db.prepare("DELETE FROM password_history WHERE user_id = 'usr-005'").run();
   });
 
   // ─────────────────────────────────────────────────────────────
@@ -380,34 +389,31 @@ async function run() {
   console.log('\n6. Account Lockout Logic (3 Consecutive Failures -> 30-Minute Lockout)');
 
   await test('Locks user account for 30 minutes after 3 consecutive failed logins', async () => {
-    // Reset counter for Priya Sharma
-    db.prepare("UPDATE users SET failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email = 'p.sharma@pharma.com'").run();
-
     // Attempt 1: Fail
-    const a1 = await req('POST', '/api/auth/login', { email: 'p.sharma@pharma.com', password: 'bad' });
+    const a1 = await req('POST', '/api/auth/login', { email: lockUserEmail, password: 'bad' });
     assert.strictEqual(a1.status, 401);
     assert.strictEqual(a1.body.attemptsLeft, 2);
 
     // Attempt 2: Fail
-    const a2 = await req('POST', '/api/auth/login', { email: 'p.sharma@pharma.com', password: 'bad' });
+    const a2 = await req('POST', '/api/auth/login', { email: lockUserEmail, password: 'bad' });
     assert.strictEqual(a2.status, 401);
     assert.strictEqual(a2.body.attemptsLeft, 1);
 
     // Attempt 3: Fail -> Must return 423 LOCKED
-    const a3 = await req('POST', '/api/auth/login', { email: 'p.sharma@pharma.com', password: 'bad' });
+    const a3 = await req('POST', '/api/auth/login', { email: lockUserEmail, password: 'bad' });
     assert.strictEqual(a3.status, 423, `Expected 423 Locked on 3rd attempt, got ${a3.status}`);
     assert.strictEqual(a3.body.code, 'LOCKED');
 
     // Attempt 4: Even with correct password, must still return 423 LOCKED
-    const a4 = await req('POST', '/api/auth/login', { email: 'p.sharma@pharma.com', password: 'Admin1234!' });
+    const a4 = await req('POST', '/api/auth/login', { email: lockUserEmail, password: 'Admin1234!' });
     assert.strictEqual(a4.status, 423, 'Locked account must reject correct password while locked');
 
     // Unlock and verify successful login resets failed_attempts
-    db.prepare("UPDATE users SET locked_until = NULL WHERE email = 'p.sharma@pharma.com'").run();
-    const a5 = await req('POST', '/api/auth/login', { email: 'p.sharma@pharma.com', password: 'Admin1234!' });
+    db.prepare("UPDATE users SET locked_until = NULL WHERE id = ?").run(lockUserId);
+    const a5 = await req('POST', '/api/auth/login', { email: lockUserEmail, password: 'Admin1234!' });
     assert.strictEqual(a5.status, 200, 'Login must succeed once unlocked');
 
-    const u = db.prepare("SELECT failed_attempts, failed_login_attempts FROM users WHERE email = 'p.sharma@pharma.com'").get();
+    const u = db.prepare("SELECT failed_attempts, failed_login_attempts FROM users WHERE id = ?").get(lockUserId);
     assert.strictEqual(u.failed_login_attempts, 0, 'failed_login_attempts must reset to 0');
     assert.strictEqual(u.failed_attempts, 0, 'failed_attempts must reset to 0');
   });
@@ -418,18 +424,15 @@ async function run() {
   console.log('\n7. Explicit Logout Audit Logging & Audit Trail View (§11.10)');
 
   await test('Logs explicit user logout with duration and IP to audit_trail view', async () => {
-    // Login to create session
-    const logUser = await req('POST', '/api/auth/login', { email: 'a.patel@pharma.com', password: 'Admin1234!' });
+    const logUser = await req('POST', '/api/auth/login', { email: mfaUserEmail, password: 'Admin1234!' });
     assert.strictEqual(logUser.status, 200);
     const uToken = logUser.body.token;
 
-    // Logout
     const logoutRes = await req('POST', '/api/auth/logout', { reason: 'User finished shift' }, uToken);
     assert.strictEqual(logoutRes.status, 200);
     assert(logoutRes.body.sessionDurationSeconds !== undefined, 'sessionDurationSeconds must be present');
 
-    // Verify audit_trail view contains the logout record
-    const auditRow = db.prepare("SELECT * FROM audit_trail WHERE action = 'Logout' AND user_name = 'Aisha Patel' ORDER BY created_at DESC LIMIT 1").get();
+    const auditRow = db.prepare("SELECT * FROM audit_trail WHERE action = 'Logout' AND user_name = 'Phase1 MFA Tester' ORDER BY created_at DESC LIMIT 1").get();
     assert(auditRow, 'Logout record must be present in audit_trail view');
     assert(auditRow.detail && auditRow.detail.includes('Explicit user logout'), 'Audit detail must record explicit logout');
   });
@@ -440,7 +443,11 @@ async function run() {
   console.log('\n8. TOTP Multi-Factor Authentication (MFA) Flow');
 
   await test('MFA setup generates Base32 secret and emergency recovery codes', async () => {
-    const setupRes = await req('POST', '/api/auth/mfa/setup', {}, token);
+    const mfaLogin = await req('POST', '/api/auth/login', { email: mfaUserEmail, password: 'Admin1234!' });
+    assert.strictEqual(mfaLogin.status, 200);
+    const mfaToken = mfaLogin.body.token;
+
+    const setupRes = await req('POST', '/api/auth/mfa/setup', {}, mfaToken);
     assert.strictEqual(setupRes.status, 200);
     assert(setupRes.body.secret, 'secret must be generated');
     assert(Array.isArray(setupRes.body.recoveryCodes), 'recoveryCodes array must be returned');
@@ -452,14 +459,11 @@ async function run() {
       encoding: 'base32'
     });
 
-    const verifyRes = await req('POST', '/api/auth/mfa/verify', { code: validCode }, token);
+    const verifyRes = await req('POST', '/api/auth/mfa/verify', { code: validCode }, mfaToken);
     assert.strictEqual(verifyRes.status, 200, `MFA verify status: ${verifyRes.status}`);
 
-    const userRecord = db.prepare("SELECT mfa_enabled FROM users WHERE email = 'e.vasquez@pharma.com'").get();
+    const userRecord = db.prepare("SELECT mfa_enabled FROM users WHERE id = ?").get(mfaUserId);
     assert.strictEqual(userRecord.mfa_enabled, 1, 'mfa_enabled must be 1');
-
-    // Reset MFA for test user so standard tests remain unaffected
-    db.prepare("UPDATE users SET mfa_enabled = 0 WHERE email = 'e.vasquez@pharma.com'").run();
   });
 
   // Cleanup test fixtures and purge history
@@ -467,8 +471,10 @@ async function run() {
     db.prepare('DELETE FROM workflow_history WHERE document_id = ?').run(testDocId);
     db.prepare('DELETE FROM electronic_signatures WHERE document_id = ?').run(testDocId);
     db.prepare('DELETE FROM documents WHERE id = ?').run(testDocId);
+    db.prepare('DELETE FROM password_history WHERE user_id IN (?, ?, ?)').run(pwdUserId, lockUserId, mfaUserId);
+    db.prepare('DELETE FROM sessions WHERE user_id IN (?, ?, ?)').run(pwdUserId, lockUserId, mfaUserId);
+    db.prepare('DELETE FROM users WHERE id IN (?, ?, ?)').run(pwdUserId, lockUserId, mfaUserId);
     db.prepare("UPDATE documents SET status = 'Draft', checked_out_by = NULL WHERE id = 'doc-005'").run();
-    db.prepare("DELETE FROM password_history").run();
   } catch (cleanErr) {}
 
   console.log('\n──────────────────────────────────────────────────────');
