@@ -9,3 +9,4 @@ uploads/*
 !uploads/.gitkeep
 .env
 .env.local
+frontend/AGENTS.md

@@ -82,7 +82,17 @@ const apiLimiter = rateLimit({
 app.use('/api/auth/login', authLimiter);
 app.use('/api/', apiLimiter);
 
-// ── Health ─────────────────────────────────────────────────
+// ── Root Index & Health ────────────────────────────────────
+app.get('/', (req, res) => res.json({
+  service: 'eTMF Pro — Enterprise API Gateway',
+  status: 'online',
+  version: '1.0.0',
+  compliance: ['ICH E6(R2)', '21 CFR Part 11', 'EU Annex 11', 'GDPR', 'ALCOA+'],
+  frontend: 'http://localhost:3000',
+  health: 'http://localhost:3002/health',
+  message: 'eTMF Pro Backend API is active. Open http://localhost:3000 for the Next.js Frontend application.'
+}));
+
 app.get('/health', (req, res) => res.json({
   status: 'ok',
   version: '1.0.0',
