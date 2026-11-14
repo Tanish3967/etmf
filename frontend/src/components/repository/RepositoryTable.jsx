@@ -16,7 +16,8 @@ export default function RepositoryTable({
   onOpenBulkDownloadModal,
   onOpenFilePlanModal,
   onOpenPlaceholderModal,
-  onNavigateToFolder
+  onNavigateToFolder,
+  onViewDocument
 }) {
   const hasActiveFilters = Boolean(selectedTreeNode || searchQuery || (statusFilter && statusFilter !== 'All'));
 
@@ -216,12 +217,18 @@ export default function RepositoryTable({
                   <th>Workflow Status</th>
                   <th>Document Name</th>
                   <th>Zone / Section</th>
+                  <th style={{ width: 90, textAlign: "center" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredDocs.map(d => (
-                  <tr key={d.id} onContextMenu={(e) => onRightClick(e, d)} style={{ cursor: "context-menu" }}>
-                    <td style={{ textAlign: "center" }}>
+                  <tr
+                    key={d.id}
+                    onDoubleClick={() => onViewDocument && onViewDocument(d)}
+                    onContextMenu={(e) => onRightClick(e, d)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <td style={{ textAlign: "center" }} onClick={e => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={selectedDocIds.includes(d.id)}
@@ -274,7 +281,28 @@ export default function RepositoryTable({
                     </td>
                     <td><span className="badge badge-info">v{d.version}</span></td>
                     <td><span className={`badge ${d.status === 'Published' || d.status === 'Approved' ? 'badge-success' : 'badge-warning'}`}>{d.status}</span></td>
-                    <td style={{ fontWeight: 500 }}>{d.title}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => onViewDocument && onViewDocument(d)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6
+                        }}
+                        title="Click to view document in website"
+                      >
+                        <span style={{ fontSize: 14 }}>📄</span>
+                        <span style={{ fontWeight: 600, color: "#0284c7", textDecoration: "underline", fontSize: 13 }}>
+                          {d.title}
+                        </span>
+                      </button>
+                    </td>
                     <td>
                       <button
                         type="button"
@@ -297,11 +325,32 @@ export default function RepositoryTable({
                         <span style={{ fontSize: 10, color: "#0284c7" }}>↗</span>
                       </button>
                     </td>
+                    <td style={{ textAlign: "center" }}>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onViewDocument && onViewDocument(d);
+                        }}
+                        className="btn-primary"
+                        style={{
+                          fontSize: 11.5,
+                          padding: "5px 10px",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          background: "#0284c7"
+                        }}
+                        title="View document in website"
+                      >
+                        <span>👁️</span> <span>View</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {filteredDocs.length === 0 && (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: "center", padding: "40px 20px", color: "#64748b" }}>
+                    <td colSpan={7} style={{ textAlign: "center", padding: "40px 20px", color: "#64748b" }}>
                       <div style={{ fontSize: 24, marginBottom: 8 }}>📄</div>
                       <div style={{ fontWeight: 600, color: "#334155", marginBottom: 6 }}>
                         {hasActiveFilters ? "No documents match the current filters" : "No documents found in the repository"}

@@ -336,6 +336,7 @@ export default function App() {
                 onOpenFilePlanModal={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}
                 onOpenPlaceholderModal={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}
                 onNavigateToFolder={handleNavigateToDocFolder}
+                onViewDocument={setViewingDoc}
               />
             </div>
           ) : (

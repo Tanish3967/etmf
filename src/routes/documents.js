@@ -6,7 +6,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { v4 as uuid } from 'uuid';
-import { join, dirname, extname } from 'path';
+import { join, dirname, extname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdirSync, existsSync } from 'fs';
 import { getDB, appendAudit } from '../database.js';
@@ -427,6 +427,49 @@ router.delete('/:id/annotations/:annId', blockInspector, (req, res) => {
   res.json({ message: 'Annotation removed' });
 });
 
+// ── GET /api/documents/:id/view — inline stream for in-app viewer ──
+router.get('/:id/view', (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Viewed', objectType: 'document', objectId: req.params.id, objectName: doc.title, ip: req.ip });
+
+  if (doc.file_path && existsSync(doc.file_path)) {
+    const ext = extname(doc.file_name || doc.file_path).toLowerCase();
+    const mimeTypes = {
+      '.pdf': 'application/pdf',
+      '.html': 'text/html; charset=utf-8',
+      '.htm': 'text/html; charset=utf-8',
+      '.txt': 'text/plain; charset=utf-8',
+      '.csv': 'text/plain; charset=utf-8',
+      '.tsv': 'text/plain; charset=utf-8',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.webp': 'image/webp',
+      '.xml': 'application/xml',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    };
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(doc.file_name || doc.title)}"`);
+    return res.sendFile(resolve(doc.file_path));
+  }
+
+  // Fallback for metadata-only or demo records without on-disk binary
+  res.status(200).json({
+    hasBinary: false,
+    message: 'No physical binary file attached to this record',
+    document: doc
+  });
+});
+
 // ── GET /api/documents/:id/preview ───────────────────────────
 router.get('/:id/preview', (req, res) => {
   const db = getDB();
@@ -434,7 +477,13 @@ router.get('/:id/preview', (req, res) => {
   if (!doc) return res.status(404).json({ error: 'Document not found' });
   
   appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Previewed', objectType: 'document', objectId: req.params.id, ip: req.ip });
-  res.json({ message: 'Preview stream initialized', file_type: doc.file_type, file_path: doc.file_path, preview_url: `/downloads/preview-${doc.id}.tmp` });
+  res.json({
+    message: 'Preview stream initialized',
+    file_type: doc.file_type,
+    file_name: doc.file_name,
+    hasFile: Boolean(doc.file_path && existsSync(doc.file_path)),
+    view_url: `/api/documents/${doc.id}/view`
+  });
 });
 
 // ── POST /api/documents/quick-upload ─────────────────────────
