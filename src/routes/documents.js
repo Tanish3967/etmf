@@ -54,21 +54,52 @@ const upload = multer({
   },
 });
 
-// ── GET /api/documents — list with filters ───────────────────
+// ── GET /api/documents — list with filters & Search By criteria (§7) ───
 router.get('/', (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   const db = getDB();
-  const { studyId, zone, section, status, search, page = 1, limit = 50 } = req.query;
+  const {
+    studyId, zone, section, status, search, searchBy = 'all',
+    country, siteId, authorId, workflowType, dateFrom, dateTo,
+    page = 1, limit = 50
+  } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
   let where = ['d.tenant_id = ?', 'd.active = 1'];
   const params = [req.tenantId];
 
-  if (studyId)  { where.push('d.study_id = ?');      params.push(studyId); }
-  if (zone)     { where.push('d.zone = ?');           params.push(zone); }
-  if (section)  { where.push('d.section = ?');        params.push(section); }
-  if (status)   { where.push('d.status = ?');         params.push(status); }
-  if (search)   { where.push('(d.title LIKE ? OR d.id LIKE ? OR d.artifact_code LIKE ?)'); params.push(`%${search}%`, `%${search}%`, `%${search}%`); }
+  if (studyId)      { where.push('d.study_id = ?');      params.push(studyId); }
+  if (zone)         { where.push('d.zone = ?');           params.push(zone); }
+  if (section)      { where.push('d.section = ?');        params.push(section); }
+  if (status)       { where.push('d.status = ?');         params.push(status); }
+  if (country)      { where.push('d.country = ?');        params.push(country); }
+  if (siteId)       { where.push('d.site_id = ?');        params.push(siteId); }
+  if (authorId)     { where.push('d.author_id = ?');      params.push(authorId); }
+  if (workflowType) { where.push('d.workflow_type = ?');  params.push(workflowType); }
+  if (dateFrom)     { where.push('date(d.created_at) >= date(?)'); params.push(dateFrom); }
+  if (dateTo)       { where.push('date(d.created_at) <= date(?)'); params.push(dateTo); }
+
+  if (search) {
+    // Support SQL wildcard '%' directly if provided, otherwise wrap in %...%
+    const likePattern = search.includes('%') ? search : `%${search}%`;
+    const by = String(searchBy).toLowerCase();
+    if (by === 'id' || by === 'document_id') {
+      where.push('(d.id LIKE ? OR d.artifact_code LIKE ?)');
+      params.push(likePattern, likePattern);
+    } else if (by === 'title' || by === 'name' || by === 'document_name') {
+      where.push('(d.title LIKE ? OR d.artifact_name LIKE ? OR d.file_name LIKE ?)');
+      params.push(likePattern, likePattern, likePattern);
+    } else if (by === 'display_name') {
+      where.push('(COALESCE(d.display_name, d.title) LIKE ?)');
+      params.push(likePattern);
+    } else if (by === 'artifact_code') {
+      where.push('(d.artifact_code LIKE ?)');
+      params.push(likePattern);
+    } else {
+      where.push('(d.title LIKE ? OR d.id LIKE ? OR d.artifact_code LIKE ? OR COALESCE(d.display_name, d.title) LIKE ? OR d.artifact_name LIKE ?)');
+      params.push(likePattern, likePattern, likePattern, likePattern, likePattern);
+    }
+  }
 
   // Data scoping for Data Manager role
   if (req.user.caps?.canView === 'scoped') {
@@ -145,8 +176,8 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
 
   const {
     studyId, artifactCode, artifactName, zone, zoneLabel, section, sectionLabel,
-    title, version = '1.0', status = 'Draft', confidential = false, mandatory = true,
-    country, siteId, effectiveDate, expiryDate, reviewerId, approverId,
+    title, displayName, workflowType = 'Review and Approve', version = '1.0', status = 'Draft', confidential = false, mandatory = true,
+    country, siteId, effectiveDate, expiryDate, reviewerId, approverId, signoffId,
     aiClassified = false, aiConfidence, aiOverridden = false, metadata = {},
   } = body;
 
@@ -155,10 +186,12 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   }
 
   const resolvedArtifactName = artifactName || title || 'Clinical Document';
+  const resolvedDisplayName = displayName || title;
   const resolvedZone = zone || (artifactCode ? artifactCode.split('.')[0] : '01');
   const resolvedZoneLabel = zoneLabel || `Zone ${resolvedZone}`;
   const resolvedSection = section || (artifactCode ? artifactCode.split('.').slice(0, 2).join('.') : `${resolvedZone}.01`);
   const resolvedSectionLabel = sectionLabel || `Section ${resolvedSection}`;
+  const resolvedStatus = workflowType === 'AutoPublish' ? 'Published' : status;
 
   const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   const file = req.file;
@@ -180,13 +213,13 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   }
 
   db.prepare(`
-    INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, version, status, file_path, file_name, file_type, file_size, file_sha256, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, version, status, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, fileSha256, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
+    INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, display_name, workflow_type, version, status, file_path, file_name, file_type, file_size, file_sha256, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, signoff_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, resolvedDisplayName, workflowType, version, resolvedStatus, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, fileSha256, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, signoffId || null, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
 
   // Initial workflow history entry
   db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(uuid(), docId, req.tenantId, null, 'Draft', req.user.id, `Document uploaded${aiClassified ? ` — AI classified (${aiConfidence}% confidence)${aiOverridden ? ', classification overridden by user' : ''}` : ''}`);
+    .run(uuid(), docId, req.tenantId, null, resolvedStatus, req.user.id, `Document uploaded (${workflowType})${aiClassified ? ` — AI classified (${aiConfidence}% confidence)${aiOverridden ? ', classification overridden by user' : ''}` : ''}`);
 
   // Remove matching placeholder
   db.prepare('UPDATE placeholders SET na_designated = 0 WHERE study_id = ? AND artifact_code = ? AND tenant_id = ?').run(studyId, artifactCode, req.tenantId);

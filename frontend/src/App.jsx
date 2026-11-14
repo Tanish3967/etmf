@@ -61,7 +61,10 @@ export default function App() {
   const [folderContextMenu, setFolderContextMenu] = useState(null);
   const [activeFolderModal, setActiveFolderModal] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchBy, setSearchBy] = useState("all");
   const [statusFilter, setStatusFilter] = useState("All");
+  const [advancedFilters, setAdvancedFilters] = useState({ country: "", workflowType: "", dateFrom: "", dateTo: "" });
+  const [showHelpGuide, setShowHelpGuide] = useState(false);
 
   // Ingestion, Bulk Selection & Inspection States
   const [selectedDocIds, setSelectedDocIds] = useState([]);
@@ -248,13 +251,43 @@ export default function App() {
       }
     }
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchText = (d.title && d.title.toLowerCase().includes(q)) ||
-                        (d.artifact_code && d.artifact_code.toLowerCase().includes(q)) ||
-                        (d.artifact_name && d.artifact_name.toLowerCase().includes(q));
-      if (!matchText) return false;
+      const raw = searchQuery.trim().toLowerCase();
+      // Support wildcard '%' pattern matching
+      const matchesPattern = (val) => {
+        if (!val) return false;
+        const text = String(val).toLowerCase();
+        if (raw.includes('%')) {
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*');
+          return new RegExp(escaped).test(text);
+        }
+        return text.includes(raw);
+      };
+      if (searchBy === 'id') {
+        if (!matchesPattern(d.id) && !matchesPattern(d.artifact_code)) return false;
+      } else if (searchBy === 'title') {
+        if (!matchesPattern(d.title) && !matchesPattern(d.artifact_name)) return false;
+      } else if (searchBy === 'display_name') {
+        if (!matchesPattern(d.display_name || d.title)) return false;
+      } else if (searchBy === 'artifact_code') {
+        if (!matchesPattern(d.artifact_code)) return false;
+      } else {
+        const matchAny = matchesPattern(d.title) || matchesPattern(d.id) || matchesPattern(d.artifact_code) || matchesPattern(d.artifact_name) || matchesPattern(d.display_name);
+        if (!matchAny) return false;
+      }
     }
     if (statusFilter !== "All" && d.status !== statusFilter) {
+      return false;
+    }
+    if (advancedFilters.country && (!d.country || !d.country.toLowerCase().includes(advancedFilters.country.toLowerCase()))) {
+      return false;
+    }
+    if (advancedFilters.workflowType && (d.workflow_type || 'Review and Approve') !== advancedFilters.workflowType) {
+      return false;
+    }
+    if (advancedFilters.dateFrom && d.created_at && d.created_at.slice(0, 10) < advancedFilters.dateFrom) {
+      return false;
+    }
+    if (advancedFilters.dateTo && d.created_at && d.created_at.slice(0, 10) > advancedFilters.dateTo) {
       return false;
     }
     return true;
@@ -278,6 +311,40 @@ export default function App() {
           <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: -0.5, color: "#0f172a" }}>eTMF<span style={{color: "#0284c7"}}>Pro</span></div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 14 }}>
+          {/* User Timezone & Help Guide (§7) */}
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: '#475569',
+              background: '#f1f5f9',
+              border: '1px solid #e2e8f0',
+              borderRadius: 6,
+              padding: '4px 10px'
+            }}
+            title="Current User Session Timezone"
+          >
+            🌐 {typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC'}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => setShowHelpGuide(true)}
+            style={{
+              background: '#f8fafc',
+              color: '#0284c7',
+              border: '1px solid #cbd5e1',
+              borderRadius: 6,
+              padding: '5px 10px',
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+            title="Clinevo eTMF 4.3 User Help Guide"
+          >
+            ❓ Help
+          </button>
+
           {/* Health Authority Inspector Mode Toggle */}
           <button
             onClick={() => setIsInspectorMode(prev => !prev)}
@@ -380,8 +447,12 @@ export default function App() {
                 setSelectedDocIds={setSelectedDocIds}
                 searchQuery={searchQuery}
                 setSearchQuery={setSearchQuery}
+                searchBy={searchBy}
+                setSearchBy={setSearchBy}
                 statusFilter={statusFilter}
                 setStatusFilter={setStatusFilter}
+                advancedFilters={advancedFilters}
+                setAdvancedFilters={setAdvancedFilters}
                 isInspectorMode={isInspectorMode}
                 onRightClick={handleRightClick}
                 onOpenUploadModal={() => setActiveUploadModal(true)}
@@ -390,6 +461,7 @@ export default function App() {
                 onOpenPlaceholderModal={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}
                 onNavigateToFolder={handleNavigateToDocFolder}
                 onViewDocument={setViewingDoc}
+                onRefresh={fetchDocs}
               />
             </div>
           ) : (
@@ -401,6 +473,8 @@ export default function App() {
                   onAdvanceWorkflow={(doc) => setActiveModal({ type: 'advance_workflow', doc })}
                   onSignDocument={(doc) => setActiveModal({ type: 'esignature', doc })}
                   onRaiseQuery={(doc) => setActiveModal({ type: 'query', doc })}
+                  onNavigateToFolder={handleNavigateToDocFolder}
+                  onRightClick={handleRightClick}
                 />
               ) : activeMenu === "Forms/Logs" ? (
                 <FormsLogsWorkspace
@@ -530,6 +604,52 @@ export default function App() {
           fetchDocs();
         }}
       />
+
+      {/* CLINEVO eTMF 4.3 HELP GUIDE MODAL (§7) */}
+      {showHelpGuide && (
+        <div
+          onClick={() => setShowHelpGuide(false)}
+          style={{
+            position: "fixed",
+            top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(15, 23, 42, 0.65)",
+            zIndex: 10000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center"
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ width: 640, maxHeight: "82vh", background: "#fff", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 20px 45px rgba(0,0,0,0.3)" }}
+          >
+            <div style={{ padding: "16px 20px", background: "#0f172a", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16 }}>📘 Clinevo eTMF 4.3 (v4.4) User Help Guide</h3>
+                <div style={{ fontSize: 11, color: "#94a3b8" }}>DIA TMF Reference Model v3.2 • 21 CFR Part 11 • ICH E6(R2) GCP</div>
+              </div>
+              <span style={{ cursor: "pointer" }} onClick={() => setShowHelpGuide(false)}>✕</span>
+            </div>
+            <div style={{ padding: 20, overflowY: "auto", fontSize: 13, color: "#334155", lineHeight: 1.6, display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <strong style={{ color: "#0f172a" }}>1. Search &amp; Wildcards (§7):</strong> Use the <em>Search By</em> dropdown to filter by Document ID, Document Name, Display Name, or DIA Artifact Code. Use <code>%</code> for wildcard matching (e.g., <code>Protocol%v2.0</code>).
+              </div>
+              <div>
+                <strong style={{ color: "#0f172a" }}>2. 15-State Clinical Workflow &amp; Archetypes (§8.5.2.9, §8.11):</strong> Documents progress through Draft, Pending Review, Under Review, Review Complete, Pending Approval, Approved, Pending Signoff, Signed Off, Pending Publish, and Published using 6 configurable archetypes (<em>AutoPublish</em>, <em>Review and Approve</em>, <em>Only Review</em>, etc.).
+              </div>
+              <div>
+                <strong style={{ color: "#0f172a" }}>3. Segregation of Duties &amp; 21 CFR Part 11 E-Signatures (§11.200):</strong> Document authors cannot approve or sign off their own records. All approvals and signoffs require dual-component re-authentication (Username + Password) and cryptographic SHA-256 signature binding.
+              </div>
+              <div>
+                <strong style={{ color: "#0f172a" }}>4. My Tasks &amp; SLA Tracking (§8.2, §8.3):</strong> Filter assigned tasks by lifecycle buckets, monitor Red/Amber/Green SLA badges, and click any Folder Path to jump directly to the DIA folder node.
+              </div>
+            </div>
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #e2e8f0", background: "#f8fafc", display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" className="btn-primary" onClick={() => setShowHelpGuide(false)}>Close Help Guide</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

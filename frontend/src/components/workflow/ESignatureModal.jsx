@@ -36,8 +36,10 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
     setError('');
 
     try {
+      const targetState = doc?.targetState || (doc?.status === 'Pending Signoff' ? 'Signed Off' : 'Approved');
       const res = await api.post(`/workflow/${doc.id}/transition`, {
-        nextState: 'Approved',
+        nextState: targetState,
+        workflowType: doc?.workflow_type,
         comment,
         credentials: {
           username: username.trim(),
@@ -46,7 +48,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
         }
       });
 
-      alert(`Electronic Signature successfully stamped!\nSignature ID: ${res.data.esigId || 'ESIG-STAMPED'}\nStatus: Approved`);
+      alert(`Electronic Signature successfully stamped!\nSignature ID: ${res.data.esigId || 'ESIG-STAMPED'}\nStatus: ${res.data.document?.status || targetState}`);
       if (onSigned) onSigned(res.data.document);
       onClose();
     } catch (err) {

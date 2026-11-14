@@ -521,6 +521,14 @@ export async function initDB() {
   addColumn('documents', 'is_pinned', 'INTEGER DEFAULT 0');
   addColumn('documents', 'is_redacted', 'INTEGER DEFAULT 0');
   addColumn('documents', 'file_sha256', 'TEXT');
+  addColumn('documents', 'workflow_type', "TEXT DEFAULT 'Review and Approve'");
+  addColumn('documents', 'signoff_id', 'TEXT');
+  addColumn('documents', 'publisher_id', 'TEXT');
+  addColumn('documents', 'display_name', 'TEXT');
+  addColumn('documents', 'site_name', 'TEXT');
+  try {
+    db.exec(`UPDATE documents SET display_name = title WHERE display_name IS NULL OR display_name = ''`);
+  } catch (e) {}
 
   // Phase 1: 21 CFR Part 11 & Core Security Hardening
   addColumn('users', 'username', 'TEXT');
