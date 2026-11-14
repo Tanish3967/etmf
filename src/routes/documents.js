@@ -8,9 +8,11 @@ import multer from 'multer';
 import { v4 as uuid } from 'uuid';
 import { join, dirname, extname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { mkdirSync, existsSync } from 'fs';
+import fs, { mkdirSync, existsSync, createReadStream, statSync } from 'fs';
+import crypto from 'crypto';
 import { getDB, appendAudit } from '../database.js';
 import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
+import { generateCompliantRendition, isPdfFile } from '../services/pdfRendition.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const UPLOAD_DIR = process.env.UPLOAD_DIR || join(__dirname, '../../../uploads');
@@ -137,7 +139,7 @@ router.get('/:id', (req, res) => {
 });
 
 // ── POST /api/documents — upload new document ────────────────
-router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'), (req, res) => {
+router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'), async (req, res) => {
   const db = getDB();
   const body = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body;
 
@@ -161,10 +163,26 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   const file = req.file;
 
+  // Streaming SHA-256 Binary Digest Computation (21 CFR Part 11 §11.70)
+  let fileSha256 = null;
+  if (file?.path && existsSync(file.path)) {
+    try {
+      const hash = crypto.createHash('sha256');
+      const fileStream = createReadStream(file.path);
+      await new Promise((resolve, reject) => {
+        fileStream.on('data', chunk => hash.update(chunk));
+        fileStream.on('end', () => { fileSha256 = hash.digest('hex'); resolve(); });
+        fileStream.on('error', reject);
+      });
+    } catch (hashErr) {
+      console.warn('Failed to compute binary stream hash:', hashErr.message);
+    }
+  }
+
   db.prepare(`
-    INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, version, status, file_path, file_name, file_type, file_size, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, version, status, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
+    INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, version, status, file_path, file_name, file_type, file_size, file_sha256, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, version, status, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, fileSha256, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
 
   // Initial workflow history entry
   db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -173,7 +191,7 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   // Remove matching placeholder
   db.prepare('UPDATE placeholders SET na_designated = 0 WHERE study_id = ? AND artifact_code = ? AND tenant_id = ?').run(studyId, artifactCode, req.tenantId);
 
-  appendAudit({ tenantId: req.tenantId, studyId, documentId: docId, userId: req.user.id, userName: req.user.name, userRole: req.user.role, action: 'Uploaded', objectType: 'document', objectId: docId, objectName: title, detail: `v${version}${aiClassified ? ` | AI: ${aiConfidence}%` : ''}`, ip: req.ip });
+  appendAudit({ tenantId: req.tenantId, studyId, documentId: docId, userId: req.user.id, userName: req.user.name, userRole: req.user.role, action: 'Uploaded', objectType: 'document', objectId: docId, objectName: title, detail: `v${version}${aiClassified ? ` | AI: ${aiConfidence}%` : ''}${fileSha256 ? ` | SHA256: ${fileSha256.slice(0, 12)}...` : ''}`, ip: req.ip });
 
   const doc = db.prepare('SELECT * FROM documents WHERE id = ?').get(docId);
   res.status(201).json({ document: doc, message: 'Document uploaded successfully' });
@@ -277,14 +295,88 @@ router.get('/:id/versions', (req, res) => {
 });
 
 // ── GET /api/documents/:id/download ──────────────────────────
-router.get('/:id/download', (req, res) => {
+router.get('/:id/download', async (req, res) => {
   const db = getDB();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Downloaded', objectType: 'document', objectId: req.params.id, objectName: doc.title, ip: req.ip });
-  if (doc.file_path && existsSync(doc.file_path)) {
-    return res.download(doc.file_path, doc.file_name || doc.title);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    documentId: req.params.id,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: 'Downloaded',
+    objectType: 'document',
+    objectId: req.params.id,
+    objectName: doc.title,
+    ip: req.ip
+  });
+
+  const signatures = db.prepare(`
+    SELECT es.*, u.name as user_name, u.role as user_role
+    FROM electronic_signatures es
+    LEFT JOIN users u ON es.user_id = u.id
+    WHERE es.document_id = ?
+    ORDER BY es.signed_at ASC
+  `).all(req.params.id);
+
+  const fileExists = doc.file_path && existsSync(doc.file_path);
+
+  if (fileExists) {
+    try {
+      const stats = statSync(doc.file_path);
+      // Gracefully handle zero-byte files without crashing
+      if (stats.size === 0) {
+        return res.download(doc.file_path, doc.file_name || doc.title);
+      }
+
+      const isPdf = isPdfFile(doc.file_path) || (doc.file_type && doc.file_type.toUpperCase() === 'PDF');
+      const forceRendition = req.query.rendition === 'true';
+
+      // If PDF or rendition requested, generate certified stamped PDF rendition
+      if (isPdf || forceRendition) {
+        const stampedBuffer = await generateCompliantRendition({
+          doc,
+          signatures,
+          requestingUser: req.user,
+          fileSource: doc.file_path
+        });
+
+        const safeFilename = `${(doc.title || doc.file_name || 'document').replace(/[^a-zA-Z0-9_\-\.]/g, '_')}_rendition.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFilename)}"`);
+        res.setHeader('Content-Length', stampedBuffer.length);
+        return res.send(stampedBuffer);
+      }
+
+      // Non-PDF files (e.g. .html, .csv, .docx) served directly
+      return res.download(doc.file_path, doc.file_name || doc.title);
+    } catch (err) {
+      console.warn('PDF rendition stamping error, falling back to original file:', err.message);
+      return res.download(doc.file_path, doc.file_name || doc.title);
+    }
   }
+
+  // Fallback for metadata-only / demo records
+  if (req.query.rendition === 'true' || signatures.length > 0 || doc.status === 'Approved') {
+    try {
+      const stampedBuffer = await generateCompliantRendition({
+        doc,
+        signatures,
+        requestingUser: req.user,
+        fileSource: null
+      });
+
+      const safeFilename = `${(doc.title || 'document').replace(/[^a-zA-Z0-9_\-\.]/g, '_')}_rendition.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeFilename)}"`);
+      res.setHeader('Content-Length', stampedBuffer.length);
+      return res.send(stampedBuffer);
+    } catch (metaErr) {
+      console.warn('Metadata PDF rendition generation failed:', metaErr.message);
+    }
+  }
+
   res.status(204).json({ message: 'No file stored (demo mode)' });
 });
 
@@ -487,19 +579,32 @@ router.get('/:id/preview', (req, res) => {
 });
 
 // ── POST /api/documents/quick-upload ─────────────────────────
-router.post('/quick-upload', blockInspector, requireCap('canUpload'), upload.single('file'), (req, res) => {
+router.post('/quick-upload', blockInspector, requireCap('canUpload'), upload.single('file'), async (req, res) => {
   const db = getDB();
   // Quick upload bypasses the wizard and extracts standard metadata or places it in a generic Uncategorized zone
   const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'File required' });
 
-  db.prepare(`
-    INSERT INTO documents (id, tenant_id, title, version, status, file_path, file_name, file_type, file_size, zone, section, created_by)
-    VALUES (?, ?, ?, '1.0', 'Draft', ?, ?, ?, ?, '00', 'Uncategorized', ?)
-  `).run(docId, req.tenantId, file.originalname, file.path, file.originalname, extname(file.originalname).slice(1).toUpperCase(), file.size, req.user.id);
+  let fileSha256 = null;
+  if (file.path && existsSync(file.path)) {
+    try {
+      const hash = crypto.createHash('sha256');
+      const stream = createReadStream(file.path);
+      await new Promise((resolve, reject) => {
+        stream.on('data', chunk => hash.update(chunk));
+        stream.on('end', () => { fileSha256 = hash.digest('hex'); resolve(); });
+        stream.on('error', reject);
+      });
+    } catch (e) {}
+  }
 
-  appendAudit({ tenantId: req.tenantId, documentId: docId, userId: req.user.id, userName: req.user.name, action: 'Quick Uploaded', objectType: 'document', objectId: docId, detail: file.originalname, ip: req.ip });
+  db.prepare(`
+    INSERT INTO documents (id, tenant_id, title, version, status, file_path, file_name, file_type, file_size, file_sha256, zone, section, created_by)
+    VALUES (?, ?, ?, '1.0', 'Draft', ?, ?, ?, ?, ?, '00', 'Uncategorized', ?)
+  `).run(docId, req.tenantId, file.originalname, file.path, file.originalname, extname(file.originalname).slice(1).toUpperCase(), file.size, fileSha256, req.user.id);
+
+  appendAudit({ tenantId: req.tenantId, documentId: docId, userId: req.user.id, userName: req.user.name, action: 'Quick Uploaded', objectType: 'document', objectId: docId, detail: `${file.originalname}${fileSha256 ? ` | SHA256: ${fileSha256.slice(0, 12)}...` : ''}`, ip: req.ip });
   res.status(201).json({ document: db.prepare('SELECT * FROM documents WHERE id = ?').get(docId) });
 });
 

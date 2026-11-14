@@ -38,6 +38,7 @@ import StudySetupWizardModal from './components/admin/StudySetupWizardModal';
 import ReportsWorkspace from './components/reports/ReportsWorkspace';
 import SystemAdminWorkspace from './components/admin/SystemAdminWorkspace';
 import EnterpriseAdminWorkspace from './components/admin/EnterpriseAdminWorkspace';
+import useIdleTimer from './hooks/useIdleTimer';
 
 export default function App() {
   const [user, setUser] = useState(() => {
@@ -69,6 +70,36 @@ export default function App() {
   const [isInspectorMode, setIsInspectorMode] = useState(false);
   const [isStudyWizardOpen, setIsStudyWizardOpen] = useState(false);
 
+  const [sessionExpiredNotice, setSessionExpiredNotice] = useState(null);
+
+  const handleLogout = useCallback(async (reason = 'User Initiated Logout', isTimeout = false) => {
+    try {
+      await api.post('/auth/logout', { reason });
+    } catch (e) {
+      console.warn('Logout notification error:', e);
+    } finally {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('etmf_token');
+        localStorage.removeItem('etmf_user');
+      }
+      setUser(null);
+      if (isTimeout) {
+        setSessionExpiredNotice(
+          'Your session expired after 10 minutes of inactivity pursuant to 21 CFR Part 11 requirements. Please re-authenticate.'
+        );
+      }
+    }
+  }, []);
+
+  // 21 CFR Part 11 §11.10(k) 10-Minute Idle Session Timeout
+  useIdleTimer({
+    enabled: Boolean(user),
+    timeout: 10 * 60 * 1000,
+    onIdle: () => {
+      handleLogout('Session Inactivity Timeout (10 minutes)', true);
+    }
+  });
+
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
       api.get("/documents")
@@ -78,6 +109,7 @@ export default function App() {
   }, [user, activeMenu]);
 
   const handleLogin = (u, token) => {
+    setSessionExpiredNotice(null);
     setUser(u);
     localStorage.setItem("etmf_token", token);
     localStorage.setItem("etmf_user", JSON.stringify(u));
@@ -228,7 +260,7 @@ export default function App() {
     return true;
   });
 
-  if (!user) return <LoginScreen onLogin={handleLogin} />;
+  if (!user) return <LoginScreen onLogin={handleLogin} sessionExpiredNotice={sessionExpiredNotice} />;
 
   const MENU_ITEMS = [
     { id: "Repository", icon: "📁" }, { id: "My Tasks", icon: "✅" }, { id: "Quality Control", icon: "🔍" },
@@ -281,6 +313,27 @@ export default function App() {
               <div style={{ fontSize: 11, color: "#64748b" }}>{user.role}</div>
             </div>
           </div>
+          <button
+            onClick={() => handleLogout('User Initiated Logout', false)}
+            style={{
+              background: '#f8fafc',
+              color: '#475569',
+              border: '1px solid #cbd5e1',
+              borderRadius: 6,
+              padding: '6px 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              transition: 'all 0.15s ease'
+            }}
+            title="Part 11 Compliant Logout"
+          >
+            <span>🚪</span>
+            <span>Sign Out</span>
+          </button>
         </div>
       </div>
 

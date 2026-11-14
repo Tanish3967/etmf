@@ -5,6 +5,8 @@ dist-ssr/
 __pycache__/
 *.pyc
 *.log
+*.db
+etmf.db
 uploads/*
 !uploads/.gitkeep
 .env
