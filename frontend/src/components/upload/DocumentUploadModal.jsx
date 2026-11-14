@@ -54,7 +54,13 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
     setFileList(prev => {
       const updated = [...prev];
       if (updated[selectedIndex]) {
-        updated[selectedIndex] = { ...updated[selectedIndex], [field]: value };
+        const item = { ...updated[selectedIndex], [field]: value };
+        if (field === 'artifactCode' && value) {
+          const parts = value.split('.');
+          if (parts[0]) item.zone = parts[0];
+          if (parts.length > 1) item.section = parts.slice(0, 2).join('.');
+        }
+        updated[selectedIndex] = item;
       }
       return updated;
     });
@@ -113,6 +119,7 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
     setError('');
 
     let successCount = 0;
+    let lastUploadedDoc = null;
 
     for (let i = 0; i < fileList.length; i++) {
       const item = fileList[i];
@@ -139,11 +146,12 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
 
       try {
         setUploadProgress(prev => ({ ...prev, [i]: 60 }));
-        await api.post('/documents', formData, {
+        const res = await api.post('/documents', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
         });
         setUploadProgress(prev => ({ ...prev, [i]: 100 }));
         successCount++;
+        lastUploadedDoc = res.data.document;
       } catch (err) {
         console.error(`Upload failed for ${item.file.name}:`, err);
         const errMsg = err.response?.data?.error || err.message || 'Upload failed';
@@ -154,8 +162,8 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
 
     setUploading(false);
     if (successCount > 0) {
-      alert(`Batch ingestion completed!\n${successCount} of ${fileList.length} files successfully filed into eTMF.`);
-      if (onUploaded) onUploaded();
+      alert(`🎉 Document Successfully Filed!\n\nTitle: ${lastUploadedDoc?.title || 'Document'}\nZone: Zone ${lastUploadedDoc?.zone || '02'}\nSection: ${lastUploadedDoc?.section || '02.01'}\nArtifact Code: ${lastUploadedDoc?.artifact_code || '02.01.01'}\nStatus: ${lastUploadedDoc?.status || 'Draft'}\n\nYour repository view has been reset to show your new document at the top.`);
+      if (onUploaded) onUploaded(lastUploadedDoc);
       onClose();
     } else {
       alert(`File ingestion failed. Please verify the document format and metadata.\nError: ${error || 'Upload was rejected by the server.'}`);

@@ -3,6 +3,7 @@ import React from 'react';
 export default function RepositoryTable({
   filteredDocs,
   selectedTreeNode,
+  setSelectedTreeNode,
   selectedDocIds,
   setSelectedDocIds,
   searchQuery,
@@ -16,6 +17,13 @@ export default function RepositoryTable({
   onOpenFilePlanModal,
   onOpenPlaceholderModal
 }) {
+  const hasActiveFilters = Boolean(selectedTreeNode || searchQuery || (statusFilter && statusFilter !== 'All'));
+
+  const handleResetFilters = () => {
+    if (setSelectedTreeNode) setSelectedTreeNode(null);
+    if (setSearchQuery) setSearchQuery('');
+    if (setStatusFilter) setStatusFilter('All');
+  };
   const stats = [
     { l: "Total Records", v: filteredDocs.length, c: "#1e293b", bg: "#f8fafc", sc: "#cbd5e1" },
     { l: "Published", v: filteredDocs.filter(d => d.status === 'Published').length, c: "#047857", bg: "#d1fae5", sc: "#34d399" },
@@ -72,7 +80,7 @@ export default function RepositoryTable({
 
         {/* Filter and Table */}
         <div style={{ padding: 20 }}>
-          <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 12, marginBottom: hasActiveFilters ? 10 : 16, alignItems: "center", flexWrap: "wrap" }}>
             <input
               className="modern-input"
               style={{ width: 320 }}
@@ -93,7 +101,99 @@ export default function RepositoryTable({
               <option value="Draft">Draft</option>
               <option value="Checked Out">Checked Out</option>
             </select>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="btn-secondary"
+                style={{ fontSize: 12, padding: "7px 12px", background: "#f1f5f9", borderColor: "#cbd5e1", color: "#334155" }}
+                title="Clear all folder, search, and status filters"
+              >
+                ✕ Reset All Filters
+              </button>
+            )}
           </div>
+
+          {hasActiveFilters && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap", fontSize: 12 }}>
+              <span style={{ color: "#64748b", fontWeight: 600 }}>Active Filters:</span>
+              {selectedTreeNode && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    background: "#e0f2fe",
+                    color: "#0369a1",
+                    fontWeight: 600,
+                    border: "1px solid #bae6fd"
+                  }}
+                >
+                  📁 Folder: {selectedTreeNode.name}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTreeNode && setSelectedTreeNode(null)}
+                    style={{ background: "none", border: "none", color: "#0369a1", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1, fontWeight: 700 }}
+                    title="Clear folder filter"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {searchQuery && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    background: "#fef3c7",
+                    color: "#92400e",
+                    fontWeight: 600,
+                    border: "1px solid #fde68a"
+                  }}
+                >
+                  🔍 &quot;{searchQuery}&quot;
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery && setSearchQuery('')}
+                    style={{ background: "none", border: "none", color: "#92400e", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1, fontWeight: 700 }}
+                    title="Clear search query"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {statusFilter && statusFilter !== 'All' && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "3px 10px",
+                    borderRadius: 999,
+                    background: "#f3e8ff",
+                    color: "#6b21a8",
+                    fontWeight: 600,
+                    border: "1px solid #e9d5ff"
+                  }}
+                >
+                  Status: {statusFilter}
+                  <button
+                    type="button"
+                    onClick={() => setStatusFilter && setStatusFilter('All')}
+                    style={{ background: "none", border: "none", color: "#6b21a8", cursor: "pointer", padding: 0, fontSize: 13, lineHeight: 1, fontWeight: 700 }}
+                    title="Clear status filter"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+            </div>
+          )}
 
           <div style={{ border: "1px solid #e2e8f0", borderRadius: 10, overflow: "hidden" }}>
             <table className="modern-table">
@@ -141,8 +241,35 @@ export default function RepositoryTable({
                 ))}
                 {filteredDocs.length === 0 && (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>
-                      No documents match the selected folder or search query. Right-click folder to add a placeholder or upload.
+                    <td colSpan={6} style={{ textAlign: "center", padding: "40px 20px", color: "#64748b" }}>
+                      <div style={{ fontSize: 24, marginBottom: 8 }}>📄</div>
+                      <div style={{ fontWeight: 600, color: "#334155", marginBottom: 6 }}>
+                        {hasActiveFilters ? "No documents match the current filters" : "No documents found in the repository"}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#94a3b8", maxWidth: 440, margin: "0 auto 14px auto" }}>
+                        {hasActiveFilters
+                          ? "Try clearing folder selection, search keyword, or status filters to view all documents across all zones."
+                          : "Upload documents or right-click any folder to add placeholders and start building your eTMF."}
+                      </div>
+                      {hasActiveFilters ? (
+                        <button
+                          type="button"
+                          onClick={handleResetFilters}
+                          className="btn-primary"
+                          style={{ fontSize: 13, padding: "8px 16px" }}
+                        >
+                          View All Documents (Reset Filters)
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={onOpenUploadModal}
+                          className="btn-primary"
+                          style={{ fontSize: 13, padding: "8px 16px" }}
+                        >
+                          + Add Document
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )}

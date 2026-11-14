@@ -250,6 +250,7 @@ export default function App() {
               <RepositoryTable
                 filteredDocs={filteredDocs}
                 selectedTreeNode={selectedTreeNode}
+                setSelectedTreeNode={setSelectedTreeNode}
                 selectedDocIds={selectedDocIds}
                 setSelectedDocIds={setSelectedDocIds}
                 searchQuery={searchQuery}
@@ -373,7 +374,12 @@ export default function App() {
         <DocumentUploadModal
           currentFolderNode={selectedTreeNode}
           onClose={() => setActiveUploadModal(false)}
-          onUploaded={() => { fetchDocs(); }}
+          onUploaded={() => {
+            fetchDocs();
+            setSelectedTreeNode(null);
+            setSearchQuery("");
+            setStatusFilter("All");
+          }}
         />
       )}
 

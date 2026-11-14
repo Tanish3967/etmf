@@ -54,6 +54,7 @@ const upload = multer({
 
 // ── GET /api/documents — list with filters ───────────────────
 router.get('/', (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   const db = getDB();
   const { studyId, zone, section, status, search, page = 1, limit = 50 } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(limit);
