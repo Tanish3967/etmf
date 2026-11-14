@@ -1,0 +1,9 @@
+node_modules/
+.next/
+dist/
+dist-ssr/
+__pycache__/
+*.pyc
+*.log
+uploads/*
+!uploads/.gitkeep

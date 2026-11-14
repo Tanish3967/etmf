@@ -1,14 +1,14 @@
 {
-  "initiative": "sprint-1-document-actions",
-  "goal": "Implement full interactive modal dialogs for all 25 document context actions in eTMF 4.3 User Guide §8.10",
+  "goal": "Migrate eTMF frontend, API gateway, and AI processing service to target enterprise architecture: Next.js (App Router), Go API Gateway, and Python/FastAPI AI Service",
   "decisions": [
-    "Modular component architecture under frontend/src/components/document/",
-    "Direct API integration with backend endpoints in src/routes/documents.js and src/routes/queries.js",
-    "Adherence to CodyMaster TDD & verification standards"
+    "Monorepo structure with services/ai-service (Python/FastAPI) and services/api-gateway (Go 1.24)",
+    "Next.js App Router for frontend with full backwards compatibility for all 10 clinical consoles",
+    "Go API Gateway implementing 21 CFR Part 11 headers, JWT auth, document routes, and delegating to FastAPI AI service",
+    "Python AI Service implementing Gemini 1.5 Flash client with exact DIA v3.2 schema, Condition A/B/C routing, and clinical NLP fallback"
   ],
-  "first_3_tasks": [
-    "1.1 Create MetadataEditorModal.jsx (§8.10.23)",
-    "1.2 Create RedactionModal.jsx (§8.10.14)",
-    "1.3 Create StickyNotesModal.jsx (§8.10.18)"
+  "first_three_tasks": [
+    "1.1 Build Python FastAPI AI Service in services/ai-service/",
+    "2.1 Build Go API Gateway in services/api-gateway/",
+    "3.1 Configure Next.js App Router in frontend/ and verify build"
   ]
 }
