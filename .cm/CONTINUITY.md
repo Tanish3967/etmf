@@ -17,7 +17,7 @@
 - **Sprint 1-5**: 8 Core document modals, DIA TMF Folder Tree & EDL File Plan, 21 CFR Part 11 Electronic Signatures, Ingestion & Bulk Download, Regulatory Inspection Mode & Quality Control Center.
 - **AI Document Orchestration**: Google AI Studio Gemini 1.5 Flash client with DIA v3.2 schema, clinical NLP fallback, and Condition A/B/C state routing.
 - **Target Microservices**: Go 1.24 API Gateway (`services/api-gateway`), Python FastAPI AI Engine (`services/ai-service`), Next.js App Router (`frontend/src/app`).
-- **Clean Code Hygiene**: 0 lint errors, 0 warnings across frontend and microservices.
+- **Clean Code Hygiene & Vite Retirement**: Legacy Vite build runner and configuration retired on `feature/consolidate-nextjs`; scripts consolidated directly to Next.js (`npm run dev` → `next dev`, `npm run build` → `next build`); 0 lint errors, 0 warnings across frontend and microservices.
 
 ## Current Active Sprint
 - **Sprint**: Sprint 5 — Regulatory Inspection Mode & Quality Control (§8.14 & §9) [COMPLETED]
