@@ -11,18 +11,81 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Auto-extract DIA code if present in filename (e.g. "02.01.01_Protocol.pdf" -> "02.01.01")
+  // Derive DIA Reference Model classification directly from currently active folder in the tree
+  const getFolderClassification = (node) => {
+    if (!node) {
+      return {
+        artifactCode: "01.01.01",
+        zone: "01",
+        section: "01.01",
+        artifactName: "01.01.01 Trial Master File Plan"
+      };
+    }
+
+    if (node.type === 'artifact') {
+      const code = node.code || (node.name ? node.name.match(/^(\d{2}\.\d{2}\.\d{2})/)?.[1] : null) || "01.01.01";
+      const parts = code.split('.');
+      return {
+        artifactCode: code,
+        zone: node.zoneCode || parts[0] || "01",
+        section: node.sectionCode || parts.slice(0, 2).join('.') || "01.01",
+        artifactName: node.name || "Clinical Document"
+      };
+    }
+
+    if (node.type === 'section') {
+      const secCode = node.code || "01.01";
+      const parts = secCode.split('.');
+      return {
+        artifactCode: `${secCode}.01`,
+        zone: node.zoneCode || parts[0] || "01",
+        section: secCode,
+        artifactName: node.name || "Clinical Document"
+      };
+    }
+
+    if (node.type === 'zone') {
+      const zoneCode = node.code || "01";
+      return {
+        artifactCode: `${zoneCode}.01.01`,
+        zone: zoneCode,
+        section: `${zoneCode}.01`,
+        artifactName: node.name || "Clinical Document"
+      };
+    }
+
+    return {
+      artifactCode: "01.01.01",
+      zone: "01",
+      section: "01.01",
+      artifactName: "Clinical Document"
+    };
+  };
+
+  // Auto-extract DIA code if present in filename prefix, or inherit from current folder
   const parseFilenameMetadata = (file) => {
     const rawName = file.name.replace(/\.[^/.]+$/, "");
-    const codeMatch = file.name.match(/(\d{2}\.\d{2}(?:\.\d{2})?)/);
-    const code = codeMatch ? codeMatch[1] : (currentFolderNode?.code || "02.01.01");
-    const zoneCode = code.split('.')[0] || "02";
-    const sectionCode = code.split('.').slice(0, 2).join('.') || "02.01";
+    const filenamePrefixMatch = file.name.match(/^(\d{2}\.\d{2}\.\d{2})/);
+    const folderClass = getFolderClassification(currentFolderNode);
+
+    let artifactCode = folderClass.artifactCode;
+    let zoneCode = folderClass.zone;
+    let sectionCode = folderClass.section;
+    let artifactName = folderClass.artifactName;
+
+    // If filename explicitly specifies a DIA code prefix (e.g. "05.02.01_SIV.pdf"), prefer it
+    if (filenamePrefixMatch) {
+      artifactCode = filenamePrefixMatch[1];
+      const parts = artifactCode.split('.');
+      zoneCode = parts[0] || "01";
+      sectionCode = parts.slice(0, 2).join('.') || `${zoneCode}.01`;
+    }
 
     return {
       file,
       title: rawName.replace(/_/g, " "),
-      artifactCode: code,
+      artifactCode,
+      artifactName,
       zone: zoneCode,
       section: sectionCode,
       version: "1.0",
@@ -130,10 +193,10 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
 
       const metadata = {
         studyId: item.studyId || "study-001",
-        artifactCode: item.artifactCode || "02.01.01",
-        artifactName: item.title,
-        zone: item.zone || "02",
-        section: item.section || "02.01",
+        artifactCode: item.artifactCode || "01.01.01",
+        artifactName: item.artifactName || item.title || "Clinical Document",
+        zone: item.zone || (item.artifactCode ? item.artifactCode.split('.')[0] : "01"),
+        section: item.section || (item.artifactCode ? item.artifactCode.split('.').slice(0, 2).join('.') : "01.01"),
         title: item.title,
         version: item.version || "1.0",
         country: item.country || "USA",
@@ -162,8 +225,8 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
 
     setUploading(false);
     if (successCount > 0) {
-      alert(`🎉 Document Successfully Filed!\n\nTitle: ${lastUploadedDoc?.title || 'Document'}\nZone: Zone ${lastUploadedDoc?.zone || '02'}\nSection: ${lastUploadedDoc?.section || '02.01'}\nArtifact Code: ${lastUploadedDoc?.artifact_code || '02.01.01'}\nStatus: ${lastUploadedDoc?.status || 'Draft'}\n\nYour repository view has been reset to show your new document at the top.`);
-      if (onUploaded) onUploaded(lastUploadedDoc);
+      alert(`🎉 Document Successfully Filed!\n\nTitle: ${lastUploadedDoc?.title || 'Document'}\nDocument ID: ${lastUploadedDoc?.id || 'N/A'}\nDIA Artifact Code: ${lastUploadedDoc?.artifact_code || '01.01.02'}\nZone: Zone ${lastUploadedDoc?.zone || '01'}\nSection: ${lastUploadedDoc?.section || '01.01'}\nStatus: ${lastUploadedDoc?.status || 'Draft'}\n\nNavigating to folder ${lastUploadedDoc?.artifact_code || ''} in the DIA tree.`);
+      if (onUploaded) onUploaded(lastUploadedDoc, currentFolderNode);
       onClose();
     } else {
       alert(`File ingestion failed. Please verify the document format and metadata.\nError: ${error || 'Upload was rejected by the server.'}`);
@@ -230,6 +293,32 @@ export default function DocumentUploadModal({ currentFolderNode, onClose, onUplo
               {error}
             </div>
           )}
+
+          {/* Current Target Folder Indicator */}
+          <div style={{
+            padding: '10px 16px',
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
+            borderRadius: 8,
+            marginBottom: 16,
+            fontSize: 12.5,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 16 }}>📁</span>
+              <span style={{ color: '#0369a1', fontWeight: 600 }}>Destination DIA Folder:</span>
+              <strong style={{ color: '#0f172a' }}>
+                {currentFolderNode ? `${currentFolderNode.code ? `[${currentFolderNode.code}] ` : ''}${currentFolderNode.name}` : '01.01.01 Trial Master File Plan (Master Root)'}
+              </strong>
+            </div>
+            <span style={{ fontSize: 11, color: '#64748b' }}>
+              Files will inherit this DIA Reference Model classification
+            </span>
+          </div>
 
           {/* Drag & Drop Zone */}
           <div

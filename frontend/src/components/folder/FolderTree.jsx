@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-const DIA_TMF_ZONES = [
+export const DIA_TMF_ZONES = [
   {
     id: "zone-01",
     code: "01",
@@ -109,6 +109,26 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
   const [search, setSearch] = useState('');
   const [expandedZones, setExpandedZones] = useState({ "zone-01": true, "zone-02": true });
   const [expandedSections, setExpandedSections] = useState({ "sec-02.01": true });
+
+  // Auto-expand tree to reveal and highlight the selected node whenever selectedNode changes
+  useEffect(() => {
+    if (selectedNode) {
+      const zCode = selectedNode.zoneCode || (selectedNode.code ? selectedNode.code.split('.')[0] : null);
+      if (zCode) {
+        const matchingZone = DIA_TMF_ZONES.find(z => z.code === zCode);
+        if (matchingZone) {
+          setExpandedZones(prev => ({ ...prev, [matchingZone.id]: true }));
+        }
+      }
+      const sCode = selectedNode.sectionCode || (selectedNode.code && selectedNode.code.split('.').length >= 2 ? selectedNode.code.split('.').slice(0, 2).join('.') : null);
+      if (sCode) {
+        const matchingSec = DIA_TMF_ZONES.flatMap(z => z.sections).find(s => s.code === sCode);
+        if (matchingSec) {
+          setExpandedSections(prev => ({ ...prev, [matchingSec.id]: true }));
+        }
+      }
+    }
+  }, [selectedNode]);
 
   const toggleZone = (zoneId) => {
     setExpandedZones(prev => ({ ...prev, [zoneId]: !prev[zoneId] }));
@@ -269,19 +289,28 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
                         {isSecExpanded && (
                           <div style={{ marginLeft: 16, paddingLeft: 4 }}>
                             {sec.artifacts.filter(matchesSearch).map((art, aIdx) => {
-                              const isArtSelected = selectedNode?.type === 'artifact' && selectedNode?.name === art;
+                              const artCode = art.split(' ')[0];
+                              const isArtSelected = selectedNode?.type === 'artifact' && (selectedNode?.code === artCode || selectedNode?.name === art);
                               return (
                                 <div
                                   key={aIdx}
-                                  onClick={() => onSelectNode({ type: 'artifact', name: art, sectionCode: sec.code, zoneCode: zone.code })}
-                                  onContextMenu={(e) => onContextMenu(e, { type: 'artifact', name: art, sec, zone })}
+                                  onClick={() => onSelectNode({
+                                    type: 'artifact',
+                                    code: artCode,
+                                    name: art,
+                                    sectionCode: sec.code,
+                                    zoneCode: zone.code,
+                                    secId: sec.id,
+                                    zoneId: zone.id
+                                  })}
+                                  onContextMenu={(e) => onContextMenu(e, { type: 'artifact', code: artCode, name: art, sec, zone })}
                                   style={{
                                     padding: '4px 8px',
                                     borderRadius: 4,
                                     fontSize: 11,
                                     color: isArtSelected ? '#0284c7' : '#64748b',
-                                    fontWeight: isArtSelected ? 600 : 400,
-                                    background: isArtSelected ? '#f0f9ff' : 'transparent',
+                                    fontWeight: isArtSelected ? 700 : 400,
+                                    background: isArtSelected ? '#e0f2fe' : 'transparent',
                                     cursor: 'pointer',
                                     display: 'flex',
                                     alignItems: 'center',

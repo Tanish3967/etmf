@@ -6,7 +6,7 @@ import LoginScreen from './components/auth/LoginScreen';
 import DynamicModule from './components/layout/DynamicModule';
 
 // Sprint 2: DIA TMF Folder Tree & Context Operations (§8.7 & §8.8)
-import FolderTree from './components/folder/FolderTree';
+import FolderTree, { DIA_TMF_ZONES } from './components/folder/FolderTree';
 import FolderContextMenu from './components/folder/FolderContextMenu';
 import AddPlaceholderModal from './components/folder/AddPlaceholderModal';
 import FilePlanModal from './components/folder/FilePlanModal';
@@ -130,6 +130,75 @@ export default function App() {
     }
   };
 
+  const handleNavigateToDocFolder = (doc) => {
+    if (!doc) return;
+    const artCode = doc.artifact_code;
+    const zCode = doc.zone || (artCode ? artCode.split('.')[0] : null);
+    const sCode = doc.section || (artCode ? artCode.split('.').slice(0, 2).join('.') : null);
+
+    let foundNode = null;
+    // 1. Check exact artifact match in DIA hierarchy
+    if (artCode) {
+      for (const zone of DIA_TMF_ZONES) {
+        for (const sec of zone.sections) {
+          for (const art of sec.artifacts) {
+            const code = art.split(' ')[0];
+            if (code === artCode || art.startsWith(artCode) || (doc.artifact_name && art.includes(doc.artifact_name))) {
+              foundNode = {
+                type: 'artifact',
+                code,
+                name: art,
+                sectionCode: sec.code,
+                zoneCode: zone.code,
+                secId: sec.id,
+                zoneId: zone.id
+              };
+              break;
+            }
+          }
+          if (foundNode) break;
+        }
+        if (foundNode) break;
+      }
+    }
+
+    // 2. Fallback to section match
+    if (!foundNode && sCode) {
+      for (const zone of DIA_TMF_ZONES) {
+        const sec = zone.sections.find(s => s.code === sCode);
+        if (sec) {
+          foundNode = {
+            type: 'section',
+            id: sec.id,
+            name: sec.name,
+            code: sec.code,
+            zoneCode: zone.code,
+            zoneId: zone.id
+          };
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback to zone match
+    if (!foundNode && zCode) {
+      const zone = DIA_TMF_ZONES.find(z => z.code === zCode);
+      if (zone) {
+        foundNode = {
+          type: 'zone',
+          id: zone.id,
+          name: zone.name,
+          code: zone.code
+        };
+      }
+    }
+
+    if (foundNode) {
+      setSelectedTreeNode(foundNode);
+      setActiveMenu("Repository");
+    }
+  };
+
   const filteredDocs = docs.filter(d => {
     if (selectedTreeNode) {
       if (selectedTreeNode.type === 'zone') {
@@ -139,7 +208,10 @@ export default function App() {
         const matchSec = (d.section && d.section.includes(selectedTreeNode.code)) || (d.artifact_code && d.artifact_code.startsWith(selectedTreeNode.code));
         if (!matchSec) return false;
       } else if (selectedTreeNode.type === 'artifact') {
-        const matchArt = d.artifact_name === selectedTreeNode.name || (d.artifact_code && selectedTreeNode.name.includes(d.artifact_code));
+        const nodeCode = selectedTreeNode.code || (selectedTreeNode.name ? selectedTreeNode.name.match(/^(\d{2}\.\d{2}\.\d{2})/)?.[1] : null);
+        const matchArt = (nodeCode && d.artifact_code === nodeCode) ||
+                         (d.artifact_code && selectedTreeNode.name && selectedTreeNode.name.includes(d.artifact_code)) ||
+                         (d.artifact_name && selectedTreeNode.name && selectedTreeNode.name.toLowerCase().includes(d.artifact_name.toLowerCase()));
         if (!matchArt) return false;
       }
     }
@@ -263,6 +335,7 @@ export default function App() {
                 onOpenBulkDownloadModal={() => setActiveBulkDownloadModal(true)}
                 onOpenFilePlanModal={() => setActiveFolderModal({ type: 'file_plan', node: selectedTreeNode })}
                 onOpenPlaceholderModal={() => setActiveFolderModal({ type: 'placeholder', node: selectedTreeNode })}
+                onNavigateToFolder={handleNavigateToDocFolder}
               />
             </div>
           ) : (
@@ -374,11 +447,15 @@ export default function App() {
         <DocumentUploadModal
           currentFolderNode={selectedTreeNode}
           onClose={() => setActiveUploadModal(false)}
-          onUploaded={() => {
+          onUploaded={(uploadedDoc, folderNode) => {
             fetchDocs();
-            setSelectedTreeNode(null);
             setSearchQuery("");
             setStatusFilter("All");
+            if (uploadedDoc) {
+              handleNavigateToDocFolder(uploadedDoc);
+            } else if (folderNode) {
+              setSelectedTreeNode(folderNode);
+            }
           }}
         />
       )}

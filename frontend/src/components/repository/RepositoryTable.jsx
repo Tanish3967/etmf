@@ -15,7 +15,8 @@ export default function RepositoryTable({
   onOpenUploadModal,
   onOpenBulkDownloadModal,
   onOpenFilePlanModal,
-  onOpenPlaceholderModal
+  onOpenPlaceholderModal,
+  onNavigateToFolder
 }) {
   const hasActiveFilters = Boolean(selectedTreeNode || searchQuery || (statusFilter && statusFilter !== 'All'));
 
@@ -232,11 +233,70 @@ export default function RepositoryTable({
                         style={{ cursor: "pointer" }}
                       />
                     </td>
-                    <td style={{ color: "#0ea5e9", fontWeight: 700, letterSpacing: 0.5 }}>{d.artifact_code || `DOC_${d.id.substring(0, 8)}`}</td>
+                    <td style={{ minWidth: 170 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToFolder && onNavigateToFolder(d)}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: 0,
+                            color: "#0284c7",
+                            fontWeight: 700,
+                            letterSpacing: 0.3,
+                            cursor: "pointer",
+                            textAlign: "left",
+                            fontSize: 12.5,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4
+                          }}
+                          title={`Click to view in DIA Folder Tree (${d.artifact_code || d.zone})`}
+                        >
+                          <span style={{ textDecoration: "underline" }}>{d.id}</span>
+                          <span style={{ fontSize: 11, textDecoration: "none" }}>📁↗</span>
+                        </button>
+                        <div style={{ fontSize: 11, color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}>
+                          <span>DIA Code:</span>
+                          <span style={{
+                            fontWeight: 700,
+                            color: "#0369a1",
+                            background: "#e0f2fe",
+                            padding: "1px 6px",
+                            borderRadius: 4,
+                            border: "1px solid #bae6fd"
+                          }}>
+                            {d.artifact_code || "N/A"}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
                     <td><span className="badge badge-info">v{d.version}</span></td>
                     <td><span className={`badge ${d.status === 'Published' || d.status === 'Approved' ? 'badge-success' : 'badge-warning'}`}>{d.status}</span></td>
                     <td style={{ fontWeight: 500 }}>{d.title}</td>
-                    <td style={{ color: "#64748b", fontSize: 13 }}>{d.zone || "01"} &gt; {d.section || "01.01"}</td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => onNavigateToFolder && onNavigateToFolder(d)}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          color: "#64748b",
+                          fontSize: 12.5,
+                          cursor: "pointer",
+                          textAlign: "left",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4
+                        }}
+                        title="Click to view folder in DIA hierarchy"
+                      >
+                        <span>{d.zone || "01"} &gt; {d.section || "01.01"}</span>
+                        <span style={{ fontSize: 10, color: "#0284c7" }}>↗</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {filteredDocs.length === 0 && (
