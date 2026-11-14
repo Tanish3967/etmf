@@ -6,7 +6,7 @@ export default function DynamicModule({ activeMenu }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
+    let ignore = false;
     let endpoint = "";
     if (activeMenu === "Security Administration") endpoint = "/users";
     else if (activeMenu === "Quality Control") endpoint = "/audit";
@@ -17,20 +17,31 @@ export default function DynamicModule({ activeMenu }) {
     else if (activeMenu === "Forms/Logs") endpoint = "/forms/schemas";
     else if (activeMenu === "Manage Enterprise") endpoint = "/admin/user-groups";
 
-    if (endpoint) {
-      api.get(endpoint).then(res => {
-        const raw = res.data;
-        const list = raw.users || raw.tasks || raw.audits || raw.logs || raw.roles || raw.groups || raw.metrics || raw.inventory || raw.templates || raw.codelists || raw.schemas || (Array.isArray(raw) ? raw : []);
-        setData(list);
-      }).catch(e => {
-        console.error("Error fetching", e);
-        setData([]);
-      })
-      .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
+    if (!endpoint) {
       setData([]);
+      setLoading(false);
+      return;
     }
+
+    Promise.resolve().then(() => {
+      if (!ignore) setLoading(true);
+      return api.get(endpoint);
+    }).then(res => {
+      if (ignore) return;
+      const raw = res.data;
+      const list = raw.users || raw.tasks || raw.audits || raw.logs || raw.roles || raw.groups || raw.metrics || raw.inventory || raw.templates || raw.codelists || raw.schemas || (Array.isArray(raw) ? raw : []);
+      setData(list);
+    }).catch(e => {
+      if (ignore) return;
+      console.error("Error fetching", e);
+      setData([]);
+    }).finally(() => {
+      if (!ignore) setLoading(false);
+    });
+
+    return () => {
+      ignore = true;
+    };
   }, [activeMenu]);
 
   if (loading) return <div style={{ padding: 60, textAlign: "center", color: "#64748b" }}>Loading backend endpoints...</div>;

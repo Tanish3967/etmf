@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export const DIA_TMF_ZONES = [
+const DIA_TMF_ZONES = [
   {
     id: "zone-01",
     code: "01",

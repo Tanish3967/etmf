@@ -1,9 +1,21 @@
 import React, { useState } from 'react';
 import api from '../../api';
 
-export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated }) {
-  if (!isOpen) return null;
+const DIA_ZONES_CONFIG = [
+  { code: '01', name: '01 Trial Management', sectionsCount: 3, artifactCount: 4, desc: 'Trial master file plan, monitoring plan, governance & team handovers' },
+  { code: '02', name: '02 Central Trial Documents', sectionsCount: 3, artifactCount: 4, desc: 'Protocol & amendments, Investigator Brochure, ICF, patient diaries' },
+  { code: '03', name: '03 Regulatory', sectionsCount: 2, artifactCount: 3, desc: 'CTA applications, health authority approvals, regulatory correspondence' },
+  { code: '04', name: '04 IRB / IEC', sectionsCount: 2, artifactCount: 3, desc: 'Central & local ethics committee approvals and safety reports' },
+  { code: '05', name: '05 Site Management', sectionsCount: 3, artifactCount: 4, desc: 'Feasibility surveys, SIV reports, Delegation of Authority (DOA) log' },
+  { code: '06', name: '06 IP & Trial Supplies', sectionsCount: 2, artifactCount: 3, desc: 'Drug shipment receipts, Certificate of Analysis (CoA), destruction logs' },
+  { code: '07', name: '07 Safety Reporting', sectionsCount: 2, artifactCount: 3, desc: 'Serious adverse events (SAEs), CIOMS forms, SUSARs & alerts' },
+  { code: '08', name: '08 Central & Local Testing', sectionsCount: 2, artifactCount: 2, desc: 'Laboratory certifications (CLIA/CAP), reference ranges, director CV' },
+  { code: '09', name: '09 Third Parties', sectionsCount: 2, artifactCount: 2, desc: 'Clinical trial agreements (CTAs), vendor master agreements & SLAs' },
+  { code: '10', name: '10 Data Management', sectionsCount: 2, artifactCount: 2, desc: 'Data management plan (DMP), eCRF completion guidelines, edit checks' },
+  { code: '11', name: '11 Statistics', sectionsCount: 2, artifactCount: 2, desc: 'Statistical analysis plan (SAP), mock shells, blind review minutes' }
+];
 
+export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated }) {
   const [currentStep, setCurrentStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -34,20 +46,6 @@ export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated 
   });
 
   // ── STEP 3: DIA TMF REFERENCE MODEL ZONES STATE ────────────────────
-  const DIA_ZONES_CONFIG = [
-    { code: '01', name: '01 Trial Management', sectionsCount: 3, artifactCount: 4, desc: 'Trial master file plan, monitoring plan, governance & team handovers' },
-    { code: '02', name: '02 Central Trial Documents', sectionsCount: 3, artifactCount: 4, desc: 'Protocol & amendments, Investigator Brochure, ICF, patient diaries' },
-    { code: '03', name: '03 Regulatory', sectionsCount: 2, artifactCount: 3, desc: 'CTA applications, health authority approvals, regulatory correspondence' },
-    { code: '04', name: '04 IRB / IEC', sectionsCount: 2, artifactCount: 3, desc: 'Central & local ethics committee approvals and safety reports' },
-    { code: '05', name: '05 Site Management', sectionsCount: 3, artifactCount: 4, desc: 'Feasibility surveys, SIV reports, Delegation of Authority (DOA) log' },
-    { code: '06', name: '06 IP & Trial Supplies', sectionsCount: 2, artifactCount: 3, desc: 'Drug shipment receipts, Certificate of Analysis (CoA), destruction logs' },
-    { code: '07', name: '07 Safety Reporting', sectionsCount: 2, artifactCount: 3, desc: 'Serious adverse events (SAEs), CIOMS forms, SUSARs & alerts' },
-    { code: '08', name: '08 Central & Local Testing', sectionsCount: 2, artifactCount: 2, desc: 'Laboratory certifications (CLIA/CAP), reference ranges, director CV' },
-    { code: '09', name: '09 Third Parties', sectionsCount: 2, artifactCount: 2, desc: 'Clinical trial agreements (CTAs), vendor master agreements & SLAs' },
-    { code: '10', name: '10 Data Management', sectionsCount: 2, artifactCount: 2, desc: 'Data management plan (DMP), eCRF completion guidelines, edit checks' },
-    { code: '11', name: '11 Statistics', sectionsCount: 2, artifactCount: 2, desc: 'Statistical analysis plan (SAP), mock shells, blind review minutes' }
-  ];
-
   const [selectedZones, setSelectedZones] = useState(DIA_ZONES_CONFIG.map(z => z.code));
 
   // ── STEP 4: SUMMARY & EDL INITIALIZATION STATE ─────────────────────
@@ -178,6 +176,8 @@ export default function StudySetupWizardModal({ isOpen, onClose, onStudyCreated 
       setSubmitting(false);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 20 }}>

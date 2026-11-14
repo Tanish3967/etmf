@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import api from '../../api';
 
-export const WF_TRANSITIONS = {
+const WF_TRANSITIONS = {
   'Draft': ['Pending Review'],
   'Pending Review': ['Review Complete', 'More Info Requested', 'Rejected'],
   'More Info Requested': ['Pending Review'],
@@ -12,14 +12,14 @@ export const WF_TRANSITIONS = {
   'Published': ['Superseded']
 };
 
-export const SLA_MAP = {
+const SLA_MAP = {
   'Pending Review': '5 Working Days (QC Review)',
   'Review Complete': '2 Working Days',
   'Pending Approval': '3 Working Days (Signoff)',
   'More Info Requested': '5 Working Days'
 };
 
-export default function WorkflowAdvanceModal({ doc, user, onClose, onAdvanced, onRequireESig }) {
+export default function WorkflowAdvanceModal({ doc, onClose, onAdvanced, onRequireESig }) {
   const currentStatus = doc?.status || 'Draft';
   const allowedNext = WF_TRANSITIONS[currentStatus] || ['Draft'];
   const [selectedNext, setSelectedNext] = useState(allowedNext[0] || '');

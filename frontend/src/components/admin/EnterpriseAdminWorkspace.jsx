@@ -3,7 +3,6 @@ import api from "../../api";
 
 export default function EnterpriseAdminWorkspace() {
   const [activeTab, setActiveTab] = useState("organizations");
-  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
 
@@ -23,34 +22,30 @@ export default function EnterpriseAdminWorkspace() {
   const [newCode, setNewCode] = useState({ code: "", name: "" });
 
   useEffect(() => {
-    fetchInitialData();
-  }, []);
-
-  async function fetchInitialData() {
-    setLoading(true);
-    try {
-      const [statsRes, tenantRes, orgsRes, codeRes] = await Promise.all([
-        api.get("/admin/stats"),
-        api.get("/admin/tenant"),
-        api.get("/admin/organization-profiles"),
-        api.get(`/admin/system-codelists?groupName=${selectedGroup}`)
-      ]);
-      setStats(statsRes.data?.stats || null);
-      const tenantObj = tenantRes.data?.tenant || tenantRes.data || {};
-      if (tenantObj) {
-        setTenant({
-          name: tenantObj.name || "Default Clinical Enterprise",
-          primaryColor: tenantObj.primary_color || tenantObj.primaryColor || "#0284c7"
-        });
+    async function fetchInitialData() {
+      try {
+        const [statsRes, tenantRes, orgsRes, codeRes] = await Promise.all([
+          api.get("/admin/stats"),
+          api.get("/admin/tenant"),
+          api.get("/admin/organization-profiles"),
+          api.get(`/admin/system-codelists?groupName=${selectedGroup}`)
+        ]);
+        setStats(statsRes.data?.stats || null);
+        const tenantObj = tenantRes.data?.tenant || tenantRes.data || {};
+        if (tenantObj) {
+          setTenant({
+            name: tenantObj.name || "Default Clinical Enterprise",
+            primaryColor: tenantObj.primary_color || tenantObj.primaryColor || "#0284c7"
+          });
+        }
+        setOrgs(orgsRes.data?.profiles || []);
+        setCodelists(codeRes.data?.codelists || []);
+      } catch (err) {
+        console.error("Failed to fetch enterprise data:", err);
       }
-      setOrgs(orgsRes.data?.profiles || []);
-      setCodelists(codeRes.data?.codelists || []);
-    } catch (err) {
-      console.error("Failed to fetch enterprise data:", err);
-    } finally {
-      setLoading(false);
     }
-  }
+    fetchInitialData();
+  }, [selectedGroup]);
 
   // Load codelists when group changes
   async function loadCodelists(grp) {
@@ -104,7 +99,7 @@ export default function EnterpriseAdminWorkspace() {
       await api.delete(`/admin/system-codelists/${id}`);
       loadCodelists(selectedGroup);
       setMessage("Dictionary item removed.");
-    } catch (err) {
+    } catch {
       setError("Failed to delete codelist item.");
     }
   }

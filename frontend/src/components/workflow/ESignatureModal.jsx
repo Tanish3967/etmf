@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import api from '../../api';
 
-export const SIGNATURE_MEANINGS = [
+const SIGNATURE_MEANINGS = [
   "I approve this document for clinical trial conduct (Approval)",
   "I have authored and reviewed this document for compliance (Author / Reviewer)",
   "I verify the accuracy, authenticity, and completeness of this record (QC Verification)",

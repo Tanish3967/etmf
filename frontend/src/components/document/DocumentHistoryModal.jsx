@@ -8,24 +8,31 @@ export default function DocumentHistoryModal({ doc, onClose, onSelectVersion }) 
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadHistory();
-  }, [doc]);
-
-  const loadHistory = async () => {
-    try {
-      setLoading(true);
-      const [verRes, docRes] = await Promise.all([
-        api.get(`/documents/${doc.id}/versions`),
-        api.get(`/documents/${doc.id}`),
-      ]);
-      setVersions(verRes.data.versions || []);
-      setWorkflowHistory(docRes.data.workflowHistory || []);
-    } catch (err) {
-      console.error('Failed to load history', err);
-    } finally {
-      setLoading(false);
+    let ignore = false;
+    const loadHistory = async () => {
+      try {
+        setLoading(true);
+        const [verRes, docRes] = await Promise.all([
+          api.get(`/documents/${doc.id}/versions`),
+          api.get(`/documents/${doc.id}`),
+        ]);
+        if (!ignore) {
+          setVersions(verRes.data.versions || []);
+          setWorkflowHistory(docRes.data.workflowHistory || []);
+        }
+      } catch (err) {
+        console.error('Failed to load history', err);
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+    if (doc?.id) {
+      loadHistory();
     }
-  };
+    return () => {
+      ignore = true;
+    };
+  }, [doc]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(4px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

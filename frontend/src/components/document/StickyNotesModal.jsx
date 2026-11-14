@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../api';
 
 export default function StickyNotesModal({ doc, onClose }) {
@@ -13,11 +13,8 @@ export default function StickyNotesModal({ doc, onClose }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchNotes();
-  }, [doc]);
-
-  const fetchNotes = async () => {
+  const fetchNotes = useCallback(async () => {
+    if (!doc?.id) return;
     try {
       setLoading(true);
       const res = await api.get(`/documents/${doc.id}`);
@@ -27,7 +24,11 @@ export default function StickyNotesModal({ doc, onClose }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [doc]);
+
+  useEffect(() => {
+    fetchNotes();
+  }, [fetchNotes]);
 
   const handleAddNote = async (e) => {
     e.preventDefault();

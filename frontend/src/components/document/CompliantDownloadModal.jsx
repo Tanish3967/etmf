@@ -26,7 +26,7 @@ export default function CompliantDownloadModal({ doc, onClose }) {
       link.click();
       link.remove();
       onClose();
-    } catch (err) {
+    } catch {
       alert('Download completed via browser stream.');
       onClose();
     } finally {

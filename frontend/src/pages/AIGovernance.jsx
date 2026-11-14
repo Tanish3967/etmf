@@ -24,7 +24,7 @@ export default function AIGovernance() {
     try {
       await api.post('/ai/governance/retrain', { artifact_code: artifactCode, reason: 'Manual Bias Retraining Trigger' });
       alert(`Model retraining queued for artifact: ${artifactCode}`);
-    } catch (err) {
+    } catch {
       alert('Failed to trigger retraining pipeline.');
     }
   };

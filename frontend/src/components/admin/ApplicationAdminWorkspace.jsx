@@ -3,7 +3,6 @@ import api from '../../api';
 
 export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
   const [activeTab, setActiveTab] = useState('studies'); // 'studies' | 'departments' | 'designations' | 'taxonomy'
-  const [loading, setLoading] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -67,9 +66,7 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
   };
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchStudies(), fetchDepartments(), fetchDesignations()])
-      .finally(() => setLoading(false));
+    Promise.all([fetchStudies(), fetchDepartments(), fetchDesignations()]);
   }, []);
 
   // ── STUDY ACTIONS ──────────────────────────────────────────────────
@@ -77,7 +74,7 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
     try {
       const res = await api.get(`/studies/${study.id}/completeness`);
       setCompletenessModal({ study, data: res.data });
-    } catch (err) {
+    } catch {
       showNotification('Failed to fetch completeness report', true);
     }
   };
@@ -87,7 +84,7 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
       const res = await api.get(`/studies/${study.id}/sites`);
       setSitesModal({ study, sites: res.data.sites || [] });
       setNewSiteData({ siteCode: '', name: '', country: 'USA', piName: '', activationDate: new Date().toISOString().split('T')[0] });
-    } catch (err) {
+    } catch {
       showNotification('Failed to fetch study sites', true);
     }
   };

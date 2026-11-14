@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../api';
 
 export default function LinkDocumentModal({ doc, onClose, onLinked }) {
@@ -9,11 +9,8 @@ export default function LinkDocumentModal({ doc, onClose, onLinked }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [doc]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
+    if (!doc?.id) return;
     try {
       setLoading(true);
       const [docsRes, detailRes] = await Promise.all([
@@ -27,7 +24,11 @@ export default function LinkDocumentModal({ doc, onClose, onLinked }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [doc]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleLink = async (e) => {
     e.preventDefault();

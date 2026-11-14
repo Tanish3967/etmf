@@ -3,27 +3,29 @@ import api from '../../api';
 
 export default function AuditHistoryModal({ doc, onClose }) {
   const [history, setHistory] = useState([]);
-  const [versions, setVersions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
-    loadAudit();
-  }, [doc]);
-
-  const loadAudit = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get(`/documents/${doc.id}`);
-      setHistory(res.data.workflowHistory || []);
-      const verRes = await api.get(`/documents/${doc.id}/versions`);
-      setVersions(verRes.data.versions || []);
-    } catch (err) {
-      setError(err.response?.data?.error || 'Failed to load audit history.');
-    } finally {
-      setLoading(false);
+    let ignore = false;
+    const loadAudit = async () => {
+      setLoading(true);
+      try {
+        const res = await api.get(`/documents/${doc.id}`);
+        if (!ignore) setHistory(res.data.workflowHistory || []);
+      } catch (err) {
+        if (!ignore) setError(err.response?.data?.error || 'Failed to load audit history.');
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+    if (doc?.id) {
+      loadAudit();
     }
-  };
+    return () => {
+      ignore = true;
+    };
+  }, [doc]);
 
   return (
     <div

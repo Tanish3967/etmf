@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../api';
 
 export default function FilePlanModal({ studyId = 'study-001', onClose }) {
@@ -8,26 +8,24 @@ export default function FilePlanModal({ studyId = 'study-001', onClose }) {
   const [error, setError] = useState('');
   const [actioningId, setActioningId] = useState(null);
 
-  useEffect(() => {
-    loadData();
-  }, [studyId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
+    if (!studyId) return;
     setLoading(true);
     try {
-      // Load EDL items
       const edlRes = await api.get(`/studies/${studyId}/edl`);
-      setEdlItems(edlRes.data.edl || []);
-
-      // Load Completeness stats
       const compRes = await api.get(`/studies/${studyId}/completeness`);
+      setEdlItems(edlRes.data.edl || []);
       setCompleteness(compRes.data);
     } catch (err) {
       setError(err.response?.data?.error || 'Unable to fetch study file plan.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [studyId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleToggleNA = async (item) => {
     const isCurrentlyNA = Boolean(item.na_designated);

@@ -40,7 +40,15 @@ import SystemAdminWorkspace from './components/admin/SystemAdminWorkspace';
 import EnterpriseAdminWorkspace from './components/admin/EnterpriseAdminWorkspace';
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const cached = localStorage.getItem("etmf_user");
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const [activeMenu, setActiveMenu] = useState("Repository");
   const [docs, setDocs] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
@@ -68,11 +76,6 @@ export default function App() {
         .catch(err => console.error("Error fetching documents:", err));
     }
   }, [user, activeMenu]);
-
-  useEffect(() => {
-    const cached = localStorage.getItem("etmf_user");
-    if (cached) setUser(JSON.parse(cached));
-  }, []);
 
   const handleLogin = (u, token) => {
     setUser(u);
@@ -110,7 +113,7 @@ export default function App() {
       try {
         const res = await api.get('/folders/f-001/tmf-index');
         alert(`TMF Index Generated: ${res.data.index?.length || 0} artifacts cataloged.`);
-      } catch (e) {
+      } catch {
         alert("TMF Index generated for: " + (node?.name || "Folder"));
       }
     } else if (actionId === 'export_folder') {
@@ -120,7 +123,7 @@ export default function App() {
         try {
           await api.post('/folders/f-001/lock');
           alert(`Folder "${node?.name}" locked per 21 CFR Part 11 requirements.`);
-        } catch (e) {
+        } catch {
           alert(`Folder "${node?.name}" status updated.`);
         }
       }

@@ -27,8 +27,8 @@ export default function ReportsWorkspace() {
         const res = await api.get("/studies");
         const list = res.data?.studies || [];
         setStudies(list);
-        if (list.length > 0 && !selectedStudy) {
-          setSelectedStudy(list[0].id);
+        if (list.length > 0) {
+          setSelectedStudy(prev => prev || list[0].id);
         }
       } catch (err) {
         console.error("Failed to load studies for reports:", err);

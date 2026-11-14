@@ -3,7 +3,6 @@ import api from "../../api";
 
 export default function SystemAdminWorkspace() {
   const [activeTab, setActiveTab] = useState("integrations");
-  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
   const [error, setError] = useState(null);
 
@@ -27,46 +26,42 @@ export default function SystemAdminWorkspace() {
   const [newDelegation, setNewDelegation] = useState({ delegator_id: "", delegatee_id: "", start_date: "", end_date: "" });
 
   useEffect(() => {
+    async function fetchInitialData() {
+      try {
+        // Numbering format & tenant
+        const tenantRes = await api.get("/admin/tenant");
+        const tenant = tenantRes.data?.tenant || tenantRes.data || {};
+        let settings = tenant.settings || {};
+        if (typeof settings === "string") {
+          try { settings = JSON.parse(settings); } catch { settings = {}; }
+        }
+        if (settings?.numberingFormat) {
+          setNumberingFormat(settings.numberingFormat);
+        }
+        if (settings?.sessionTimeoutMinutes) {
+          setSessionTimeout(settings.sessionTimeoutMinutes);
+        }
+        if (settings?.ipAllowlist) {
+          setIpAllowlist(settings.ipAllowlist);
+        }
+
+        // Workflow templates
+        const wfRes = await api.get("/admin/workflow-templates");
+        setTemplates(wfRes.data?.templates || []);
+
+        // Delegations
+        const delRes = await api.get("/admin/delegations");
+        setDelegations(delRes.data?.delegations || []);
+
+        // Users for delegation picker
+        const usersRes = await api.get("/users");
+        setUsers(usersRes.data?.users || []);
+      } catch (err) {
+        console.error("Failed to load system admin data:", err);
+      }
+    }
     fetchInitialData();
   }, []);
-
-  async function fetchInitialData() {
-    setLoading(true);
-    try {
-      // Numbering format & tenant
-      const tenantRes = await api.get("/admin/tenant");
-      const tenant = tenantRes.data?.tenant || tenantRes.data || {};
-      let settings = tenant.settings || {};
-      if (typeof settings === "string") {
-        try { settings = JSON.parse(settings); } catch (_) { settings = {}; }
-      }
-      if (settings?.numberingFormat) {
-        setNumberingFormat(settings.numberingFormat);
-      }
-      if (settings?.sessionTimeoutMinutes) {
-        setSessionTimeout(settings.sessionTimeoutMinutes);
-      }
-      if (settings?.ipAllowlist) {
-        setIpAllowlist(settings.ipAllowlist);
-      }
-
-      // Workflow templates
-      const wfRes = await api.get("/admin/workflow-templates");
-      setTemplates(wfRes.data?.templates || []);
-
-      // Delegations
-      const delRes = await api.get("/admin/delegations");
-      setDelegations(delRes.data?.delegations || []);
-
-      // Users for delegation picker
-      const usersRes = await api.get("/users");
-      setUsers(usersRes.data?.users || []);
-    } catch (err) {
-      console.error("Failed to load system admin data:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   // Trigger Integration Sync
   async function handleSync(system) {
@@ -91,7 +86,7 @@ export default function SystemAdminWorkspace() {
       await api.post("/admin/lms/sync");
       setSyncStatus((prev) => ({ ...prev, LMS: "✅ Training Roster Updated" }));
       setMessage("GCP & Protocol Training records synchronized from Enterprise LMS.");
-    } catch (err) {
+    } catch {
       setSyncStatus((prev) => ({ ...prev, LMS: "❌ LMS Sync Failed" }));
       setError("Failed to sync LMS training records.");
     }

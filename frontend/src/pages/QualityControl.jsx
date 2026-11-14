@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import api from '../api';
+import { useState } from "react";
 
 const T = { bar: "#0073e6", border: "#d1d5db", textMuted: "#6b7280" };
 

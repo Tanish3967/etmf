@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import api from '../../api';
 
 export default function MyTasksWorkspace({
-  user,
   onViewDocument,
   onAdvanceWorkflow,
   onSignDocument,

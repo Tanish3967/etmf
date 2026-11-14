@@ -28,7 +28,7 @@ export default function BulkDownloadModal({ selectedDocs = [], allDocs = [], onC
 
       alert(`Bulk Package Generated Successfully!\n${docsToPackage.length} clinical records archived and exported.`);
       onClose();
-    } catch (err) {
+    } catch {
       alert(`Export package ready. Generated for ${docsToPackage.length} records.`);
       onClose();
     } finally {

@@ -3,7 +3,6 @@ import api from '../../api';
 
 export default function SecurityAdminWorkspace() {
   const [activeTab, setActiveTab] = useState('users'); // 'users' | 'groups' | 'functional_roles'
-  const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -144,9 +143,7 @@ export default function SecurityAdminWorkspace() {
   };
 
   useEffect(() => {
-    setLoading(true);
-    Promise.all([fetchUsers(), fetchUserGroups(), fetchFunctionalRoles(), fetchCodelists()])
-      .finally(() => setLoading(false));
+    Promise.all([fetchUsers(), fetchUserGroups(), fetchFunctionalRoles(), fetchCodelists()]);
   }, []);
 
   // ── USER MANAGEMENT HANDLERS ───────────────────────────────────────
