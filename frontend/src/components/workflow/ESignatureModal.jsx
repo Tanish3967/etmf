@@ -9,16 +9,26 @@ const SIGNATURE_MEANINGS = [
 ];
 
 export default function ESignatureModal({ doc, user, onClose, onSigned }) {
+  const [username, setUsername] = useState(user?.username || user?.email || '');
   const [password, setPassword] = useState('');
   const [meaning, setMeaning] = useState(SIGNATURE_MEANINGS[0]);
   const [comment, setComment] = useState('Approved following clinical QA review.');
+  const [acknowledged, setAcknowledged] = useState(false);
   const [signing, setSigning] = useState(false);
   const [error, setError] = useState('');
 
   const handleSign = async (e) => {
     e.preventDefault();
+    if (!username.trim()) {
+      setError('User ID / Username is required for dual-component re-authentication (21 CFR §11.200).');
+      return;
+    }
     if (!password) {
       setError('Password re-authentication is mandatory under 21 CFR Part 11.');
+      return;
+    }
+    if (!acknowledged) {
+      setError('You must confirm the 21 CFR Part 11 legal binding acknowledgment before signing.');
       return;
     }
 
@@ -30,6 +40,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
         nextState: 'Approved',
         comment,
         credentials: {
+          username: username.trim(),
           password,
           meaning
         }
@@ -39,7 +50,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
       if (onSigned) onSigned(res.data.document);
       onClose();
     } catch (err) {
-      setError(err.response?.data?.error || 'Electronic signature authorization failed. Please check your password.');
+      setError(err.response?.data?.error || 'Electronic signature authorization failed. Please check your credentials.');
     } finally {
       setSigning(false);
     }
@@ -66,7 +77,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 540,
+          width: 560,
           background: '#fff',
           borderRadius: 14,
           boxShadow: '0 25px 50px rgba(0,0,0,0.3)',
@@ -101,7 +112,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
                 21 CFR Part 11 Electronic Signature
               </h3>
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
-                Legally Binding Identity &amp; Approval Attestation
+                Dual-Component Identification &amp; Legally Binding Attestation (§11.200)
               </div>
             </div>
           </div>
@@ -148,7 +159,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
           </div>
 
           {/* Meaning Dropdown */}
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#475569', marginBottom: 4 }}>
               LEGAL MEANING OF SIGNATURE (§11.50) *
             </label>
@@ -165,7 +176,7 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
           </div>
 
           {/* Comment Field */}
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 14 }}>
             <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#475569', marginBottom: 4 }}>
               AUDIT TRAIL COMMENT / NOTES
             </label>
@@ -178,44 +189,76 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
             />
           </div>
 
-          {/* Re-Authentication Password */}
+          {/* Dual-Component Re-Authentication (Username & Password) */}
           <div style={{
             background: '#f0fdf4',
             border: '1px solid #bbf7d0',
             borderRadius: 8,
             padding: '14px 16px',
-            marginBottom: 18
+            marginBottom: 16
           }}>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 6 }}>
-              🔒 CONFIRM IDENTITY (PASSWORD RE-AUTHENTICATION) *
-            </label>
-            <input
-              type="password"
-              className="modern-input"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Enter your login password to sign"
-              required
-              autoFocus
-              style={{ width: '100%', background: '#fff' }}
-            />
-            <div style={{ fontSize: 11, color: '#15803d', marginTop: 6, lineHeight: 1.4 }}>
-              Pursuant to 21 CFR Part 11, your signature incorporates a cryptographic SHA-256 seal linked to your user record and current IP address.
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#166534', marginBottom: 10 }}>
+              🔒 DUAL-COMPONENT RE-AUTHENTICATION (21 CFR §11.200) *
+            </div>
+
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#166534', marginBottom: 4 }}>
+                USER ID / USERNAME *
+              </label>
+              <input
+                type="text"
+                className="modern-input"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+                placeholder="Enter your user ID or email"
+                required
+                style={{ width: '100%', background: '#fff' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#166534', marginBottom: 4 }}>
+                PASSWORD *
+              </label>
+              <input
+                type="password"
+                className="modern-input"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Enter your login password to sign"
+                required
+                autoFocus
+                style={{ width: '100%', background: '#fff' }}
+              />
+            </div>
+
+            <div style={{ fontSize: 10.5, color: '#15803d', marginTop: 8, lineHeight: 1.4 }}>
+              Pursuant to 21 CFR §11.70, your signature will be cryptographically bound via SHA-256 to the document binary digest, your identity, and timestamp.
             </div>
           </div>
 
-          {/* Regulatory Declaration */}
+          {/* Part 11 Legal Binding Acknowledgment Checkbox */}
           <div style={{
-            fontSize: 11,
-            color: '#64748b',
-            lineHeight: 1.4,
-            marginBottom: 20,
-            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 10,
+            marginBottom: 16,
+            padding: '10px 12px',
             background: '#f8fafc',
             borderRadius: 6,
             borderLeft: '3px solid #0ea5e9'
           }}>
-            I understand that by executing this electronic signature, I certify that I am the individual named above and that this signature is legally binding.
+            <input
+              type="checkbox"
+              id="part11-ack"
+              checked={acknowledged}
+              onChange={e => setAcknowledged(e.target.checked)}
+              style={{ marginTop: 2, cursor: 'pointer' }}
+              required
+            />
+            <label htmlFor="part11-ack" style={{ fontSize: 11.5, color: '#334155', lineHeight: 1.4, cursor: 'pointer', fontWeight: 500 }}>
+              I confirm that my electronic signature is the legally binding equivalent of my traditional handwritten signature pursuant to 21 CFR Part 11.
+            </label>
           </div>
 
           {/* Action Buttons */}
@@ -225,9 +268,9 @@ export default function ESignatureModal({ doc, user, onClose, onSigned }) {
             </button>
             <button
               type="submit"
-              disabled={signing || !password}
+              disabled={signing || !username.trim() || !password || !acknowledged}
               className="btn-primary"
-              style={{ background: '#059669', borderColor: '#059669' }}
+              style={{ background: '#059669', borderColor: '#059669', opacity: (signing || !username.trim() || !password || !acknowledged) ? 0.6 : 1 }}
             >
               {signing ? 'Verifying & Stamping...' : '✍️ Execute Electronic Signature'}
             </button>

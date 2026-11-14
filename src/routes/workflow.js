@@ -6,6 +6,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { v4 as uuid } from 'uuid';
 import crypto from 'crypto';
+import fs from 'fs';
 import { getDB, appendAudit } from '../database.js';
 import { requireAuth, blockInspector } from '../middleware/auth.js';
 
@@ -66,20 +67,58 @@ router.post('/:docId/transition', blockInspector, async (req, res) => {
 
   // E-signature required for Approval (21 CFR Part 11 §11.200)
   if (nextState === 'Approved') {
-    if (!credentials?.password) {
-      return res.status(400).json({ error: 'Re-authentication required for electronic signature (21 CFR Part 11)', code: 'ESIG_REQUIRED' });
-    }
-    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
-    const valid = await bcrypt.compare(credentials.password, user.password_hash);
-    if (!valid) {
-      return res.status(401).json({ error: 'Invalid credentials — re-authentication failed', code: 'ESIG_FAILED' });
+    const username = credentials?.username || req.body?.username;
+    const password = credentials?.password || req.body?.password;
+    const meaning = credentials?.meaning || req.body?.meaning || 'Approved';
+
+    if (!username || !password) {
+      return res.status(400).json({
+        error: 'Dual-component re-authentication required for electronic signature (21 CFR Part 11 §11.200): both User ID (username) and password are mandatory',
+        code: 'ESIG_REQUIRED'
+      });
     }
 
-    // Record electronic signature
-    const sigHash = crypto.createHash('sha256').update(`${req.user.id}:${req.params.docId}:${new Date().toISOString()}:${credentials.meaning || 'Approved'}`).digest('hex');
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    if (!user) {
+      return res.status(401).json({ error: 'User session not found', code: 'ESIG_FAILED' });
+    }
+
+    const expectedUsernames = [
+      (user.username || '').toLowerCase(),
+      (user.email || '').toLowerCase()
+    ].filter(Boolean);
+
+    if (!expectedUsernames.includes(username.trim().toLowerCase())) {
+      return res.status(401).json({
+        error: 'Electronic signature User ID mismatch: provided username does not match authenticated user session',
+        code: 'ESIG_FAILED'
+      });
+    }
+
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({
+        error: 'Invalid password — electronic signature re-authentication failed',
+        code: 'ESIG_FAILED'
+      });
+    }
+
+    // Cryptographic signature record binding (§11.70):
+    // sha256(doc.file_sha256 + req.user.id + reason + timestamp)
+    let fileSha256 = doc.file_sha256;
+    if (!fileSha256 && doc.file_path && fs.existsSync(doc.file_path)) {
+      const fileBuf = fs.readFileSync(doc.file_path);
+      fileSha256 = crypto.createHash('sha256').update(fileBuf).digest('hex');
+      db.prepare('UPDATE documents SET file_sha256 = ? WHERE id = ?').run(fileSha256, doc.id);
+    }
+    const effectiveFileSha = fileSha256 || crypto.createHash('sha256').update(doc.id).digest('hex');
+    const timestamp = new Date().toISOString();
+    const bindingPayload = `${effectiveFileSha}:${req.user.id}:${meaning}:${timestamp}`;
+    const sigHash = crypto.createHash('sha256').update(bindingPayload).digest('hex');
+
     esigId = uuid();
-    db.prepare('INSERT INTO electronic_signatures (id, document_id, tenant_id, user_id, meaning, sig_hash, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(esigId, req.params.docId, req.tenantId, req.user.id, credentials.meaning || 'Approved', sigHash, req.ip);
+    db.prepare('INSERT INTO electronic_signatures (id, document_id, tenant_id, user_id, meaning, sig_hash, ip_address, signed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(esigId, req.params.docId, req.tenantId, req.user.id, meaning, sigHash, req.ip, timestamp);
   }
 
   // Execute transition

@@ -218,13 +218,13 @@ async function run() {
   });
 
   await test('Approval with wrong credentials returns 401 (21 CFR Part 11)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Approved', credentials: { password: 'wrongpass', meaning: 'Approved' } }, token);
+    const r = await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Approved', credentials: { username: 'e.vasquez@pharma.com', password: 'wrongpass', meaning: 'Approved' } }, token);
     assert(r.status === 401, `Expected 401, got ${r.status}`);
     assert(r.body.code === 'ESIG_FAILED', `Expected ESIG_FAILED, got ${r.body.code}`);
   });
 
   await test('Approval with correct credentials succeeds (e-signature stored)', async () => {
-    const r = await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Approved', credentials: { password: 'Admin1234!', meaning: 'Approved' } }, token);
+    const r = await req('POST', '/api/workflow/doc-005/transition', { nextState: 'Approved', credentials: { username: 'e.vasquez@pharma.com', password: 'Admin1234!', meaning: 'Approved' } }, token);
     assert(r.status === 200, `Expected 200, got ${r.status}: ${JSON.stringify(r.body)}`);
     assert(r.body.document.status === 'Approved', `Expected Approved, got ${r.body.document?.status}`);
     assert(r.body.esigId, 'No esigId in response');

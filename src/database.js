@@ -45,20 +45,33 @@ export async function initDB() {
       tenant_id         TEXT NOT NULL REFERENCES tenants(id),
       name              TEXT NOT NULL,
       email             TEXT NOT NULL,
+      username          TEXT,
       password_hash     TEXT NOT NULL,
       role              TEXT NOT NULL,
       dept              TEXT,
       active            INTEGER DEFAULT 1,
       mfa_secret        TEXT,
       mfa_enabled       INTEGER DEFAULT 0,
+      mfa_recovery_codes TEXT DEFAULT '[]',
       failed_attempts   INTEGER DEFAULT 0,
+      failed_login_attempts INTEGER DEFAULT 0,
       locked_until      TEXT,
+      must_change_password INTEGER DEFAULT 0,
       last_login        TEXT,
       password_changed  TEXT DEFAULT (datetime('now')),
       created_at        TEXT DEFAULT (datetime('now')),
       created_by        TEXT,
       UNIQUE(tenant_id, email)
     );
+
+    -- ── PASSWORD HISTORY (21 CFR Part 11 §3) ──────────────────────────
+    CREATE TABLE IF NOT EXISTS password_history (
+      id            TEXT PRIMARY KEY,
+      user_id       TEXT NOT NULL REFERENCES users(id),
+      password_hash TEXT NOT NULL,
+      created_at    TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_pwd_hist_user ON password_history(user_id, created_at);
 
     -- ── USER SESSIONS ────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS sessions (
@@ -144,6 +157,7 @@ export async function initDB() {
       ai_confidence    REAL,
       ai_overridden    INTEGER DEFAULT 0,
       metadata         TEXT DEFAULT '{}',
+      file_sha256      TEXT,
       active           INTEGER DEFAULT 1,
       is_pinned        INTEGER DEFAULT 0,
       is_redacted      INTEGER DEFAULT 0,
@@ -506,6 +520,20 @@ export async function initDB() {
   addColumn('documents', 'active', 'INTEGER DEFAULT 1');
   addColumn('documents', 'is_pinned', 'INTEGER DEFAULT 0');
   addColumn('documents', 'is_redacted', 'INTEGER DEFAULT 0');
+  addColumn('documents', 'file_sha256', 'TEXT');
+
+  // Phase 1: 21 CFR Part 11 & Core Security Hardening
+  addColumn('users', 'username', 'TEXT');
+  addColumn('users', 'failed_login_attempts', 'INTEGER DEFAULT 0');
+  addColumn('users', 'locked_until', 'TEXT');
+  addColumn('users', 'must_change_password', 'INTEGER DEFAULT 0');
+  addColumn('users', 'mfa_recovery_codes', "TEXT DEFAULT '[]'");
+  try {
+    db.exec(`UPDATE users SET username = email WHERE username IS NULL OR username = ''`);
+  } catch (e) {}
+  try {
+    db.exec(`CREATE VIEW IF NOT EXISTS audit_trail AS SELECT * FROM audit_log`);
+  } catch (e) {}
   
   // Phase 2: User profile enhancements
   addColumn('users', 'first_name', 'TEXT');
@@ -652,8 +680,12 @@ async function seedDemoData() {
     { id:'usr-006', name:'Aisha Patel',     email:'a.patel@pharma.com',    role:'System Administrator',    dept:'IT'         },
     { id:'usr-007', name:'Tom Eriksen',     email:'t.eriksen@ema.europa.eu',role:'Inspector / Auditor',    dept:'Authority'  },
   ];
-  const insertUser = db.prepare(`INSERT OR IGNORE INTO users (id,tenant_id,name,email,password_hash,role,dept,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,1,?,?)`);
-  users.forEach(u => insertUser.run(u.id, tenantId, u.name, u.email, pwHash, u.role, u.dept, now, 'system'));
+  const insertUser = db.prepare(`INSERT OR IGNORE INTO users (id,tenant_id,name,email,username,password_hash,role,dept,active,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,1,?,?)`);
+  const insertPwdHist = db.prepare(`INSERT OR IGNORE INTO password_history (id, user_id, password_hash, created_at) VALUES (?, ?, ?, ?)`);
+  users.forEach(u => {
+    insertUser.run(u.id, tenantId, u.name, u.email, u.email, pwHash, u.role, u.dept, now, 'system');
+    insertPwdHist.run(`ph-${u.id}-init`, u.id, pwHash, now);
+  });
 
   // Seed study
   db.prepare(`INSERT OR IGNORE INTO studies (id,tenant_id,protocol_number,title,phase,sponsor_name,status,start_date,planned_end_date,created_at,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
