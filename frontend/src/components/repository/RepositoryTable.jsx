@@ -26,11 +26,47 @@ export default function RepositoryTable({
     if (setSearchQuery) setSearchQuery('');
     if (setStatusFilter) setStatusFilter('All');
   };
+  // Accurate, non-leaking status counts across all clinical workflow stages
+  const publishedCount = filteredDocs.filter(d => d.status === 'Published').length;
+  const approvedCount = filteredDocs.filter(d => d.status === 'Approved').length;
+  // All pre-approval & active review pipeline items (Draft, Pending Review, Under Review, Pending Approval, In QC, etc.)
+  const inQcReviewCount = filteredDocs.filter(d => d.status !== 'Published' && d.status !== 'Approved').length;
+
   const stats = [
-    { l: "Total Records", v: filteredDocs.length, c: "#1e293b", bg: "#f8fafc", sc: "#cbd5e1" },
-    { l: "Published", v: filteredDocs.filter(d => d.status === 'Published').length, c: "#047857", bg: "#d1fae5", sc: "#34d399" },
-    { l: "Approved", v: filteredDocs.filter(d => d.status === 'Approved').length, c: "#1d4ed8", bg: "#dbeafe", sc: "#60a5fa" },
-    { l: "In QC / Review", v: filteredDocs.filter(d => d.status === 'Pending Review' || d.status === 'Draft').length, c: "#b45309", bg: "#fef3c7", sc: "#fbbf24" },
+    {
+      l: "Total Records",
+      v: filteredDocs.length,
+      c: "#1e293b",
+      bg: "#f8fafc",
+      sc: "#cbd5e1",
+      tooltip: "Total records matching current folder/search filters"
+    },
+    {
+      l: "Published",
+      v: publishedCount,
+      c: "#047857",
+      bg: "#d1fae5",
+      sc: "#34d399",
+      tooltip: "Finalized & published clinical records",
+      onClick: () => setStatusFilter && setStatusFilter(statusFilter === 'Published' ? 'All' : 'Published')
+    },
+    {
+      l: "Approved",
+      v: approvedCount,
+      c: "#1d4ed8",
+      bg: "#dbeafe",
+      sc: "#60a5fa",
+      tooltip: "Part 11 e-signed & approved records",
+      onClick: () => setStatusFilter && setStatusFilter(statusFilter === 'Approved' ? 'All' : 'Approved')
+    },
+    {
+      l: "In QC / Review",
+      v: inQcReviewCount,
+      c: "#b45309",
+      bg: "#fef3c7",
+      sc: "#fbbf24",
+      tooltip: "Active workflow records (Drafts, QC, Under Review, Pending Approval)"
+    },
   ];
 
   return (
@@ -73,9 +109,37 @@ export default function RepositoryTable({
         {/* Curator Stats */}
         <div style={{ display: "flex", padding: 20, borderBottom: "1px solid #e2e8f0", gap: 30, justifyContent: "space-around" }}>
           {stats.map(s => (
-            <div key={s.l} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+            <div
+              key={s.l}
+              onClick={s.onClick}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 6,
+                cursor: s.onClick ? "pointer" : "default",
+                userSelect: "none"
+              }}
+              title={s.tooltip || s.l}
+            >
               <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase" }}>{s.l}</div>
-              <div style={{ width: 50, height: 50, borderRadius: "50%", background: s.bg, border: `3px solid ${s.sc}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800, color: s.c }}>{s.v}</div>
+              <div style={{
+                width: 50,
+                height: 50,
+                borderRadius: "50%",
+                background: s.bg,
+                border: `3px solid ${s.sc}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 16,
+                fontWeight: 800,
+                color: s.c,
+                transition: "transform 0.15s ease",
+                boxShadow: s.onClick ? "0 2px 4px rgba(0,0,0,0.05)" : "none"
+              }}>
+                {s.v}
+              </div>
             </div>
           ))}
         </div>
