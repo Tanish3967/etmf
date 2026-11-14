@@ -1,10 +1,23 @@
 # Project Continuity — eTMF Pro
 
-## Project Identity
-- **Project**: eTMF Pro (Electronic Trial Master File)
-- **Architecture**: Vite + React 19 SPA Frontend, Express 4 + Better-SQLite3 Backend
-- **Compliance**: ICH E6(R2), 21 CFR Part 11, EU Annex 11, ALCOA+, DIA TMF Reference Model v3.2
-- **User Guide Reference**: Clinevo eTMF 4.3 / 4.4 User Guide
+## Project Identity & Architecture
+- **Project**: eTMF Pro (Enterprise Electronic Trial Master File)
+- **Target Architecture**: Next.js App Router (Frontend) → Go 1.24 (API Gateway) → Kafka (Event Queue) → Python 3.10 FastAPI (AI Orchestration Engine) backed by SQLite/Postgres (Audit & Storage)
+- **Compliance Standards**: ICH GCP E6(R2), 21 CFR Part 11, EU Annex 11, ALCOA+, DIA TMF Reference Model v3.2
+- **User Guide Reference**: Clinevo eTMF 4.3 / 4.4 Enterprise User Guide
+
+## Core Operational Rules
+> **Mandatory Branching Protocol**: For any new feature development or testing:
+> 1. Always branch off `main` to a dedicated branch: `git checkout -b feature/<feature-name>` (or `test/<feature-name>`).
+> 2. Implement, test, and perform clean code gates exclusively on the branch.
+> 3. Verify all test suites (unit, integration, build, lint) pass 100%.
+> 4. Merge back to `main` only after full verification is complete and confirmed.
+
+## Completed Milestones
+- **Sprint 1-5**: 8 Core document modals, DIA TMF Folder Tree & EDL File Plan, 21 CFR Part 11 Electronic Signatures, Ingestion & Bulk Download, Regulatory Inspection Mode & Quality Control Center.
+- **AI Document Orchestration**: Google AI Studio Gemini 1.5 Flash client with DIA v3.2 schema, clinical NLP fallback, and Condition A/B/C state routing.
+- **Target Microservices**: Go 1.24 API Gateway (`services/api-gateway`), Python FastAPI AI Engine (`services/ai-service`), Next.js App Router (`frontend/src/app`).
+- **Clean Code Hygiene**: 0 lint errors, 0 warnings across frontend and microservices.
 
 ## Current Active Sprint
 - **Sprint**: Sprint 5 — Regulatory Inspection Mode & Quality Control (§8.14 & §9) [COMPLETED]
