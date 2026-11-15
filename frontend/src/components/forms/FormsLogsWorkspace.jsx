@@ -126,6 +126,31 @@ export default function FormsLogsWorkspace({ onFormPushed }) {
     }
   };
 
+  const handleUnlockForm = async (entryId) => {
+    const reason = window.prompt('Enter justification reason to unlock this form:', 'Data correction requested by CRA');
+    if (!reason) return;
+    try {
+      await api.patch(`/forms/data/${entryId}/unlock`, { reason });
+      alert('Form unlocked successfully.');
+      loadFormData(selectedSchema.id);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to unlock form.');
+    }
+  };
+
+  const handleFreezeForm = async (entry) => {
+    const freeze = !entry.is_frozen;
+    const reason = window.prompt(`Enter reason to ${freeze ? 'freeze' : 'unfreeze'} this form:`, 'Interim database freeze');
+    if (!reason) return;
+    try {
+      await api.patch(`/forms/data/${entry.id}/freeze`, { freeze, reason });
+      alert(`Form ${freeze ? 'frozen' : 'unfrozen'} successfully.`);
+      loadFormData(selectedSchema.id);
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to update freeze state.');
+    }
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Header */}
@@ -221,16 +246,16 @@ export default function FormsLogsWorkspace({ onFormPushed }) {
                       <td style={{ fontWeight: 600 }}>{entry.created_by_name || 'Investigator'}</td>
                       <td style={{ fontSize: 12, color: '#64748b' }}>{new Date(entry.created_at).toLocaleString()}</td>
                       <td>
-                        <span className={`badge ${entry.is_locked ? 'badge-danger' : 'badge-success'}`}>
-                          {entry.is_locked ? '🔒 LOCKED' : '✓ ACTIVE'}
+                        <span className={`badge ${entry.is_locked ? 'badge-danger' : entry.is_frozen ? 'badge-warning' : 'badge-success'}`}>
+                          {entry.is_locked ? '🔒 LOCKED' : entry.is_frozen ? '❄️ FROZEN' : '✓ ACTIVE'}
                         </span>
                       </td>
                       <td style={{ fontSize: 12.5, color: '#334155' }}>
                         Site: <strong>{data.site_number || 'Site-001'}</strong> | {rowCount} Grid Items
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                          {!entry.is_locked && (
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                          {!entry.is_locked ? (
                             <button
                               className="btn-secondary"
                               onClick={() => handleLockForm(entry.id)}
@@ -239,7 +264,24 @@ export default function FormsLogsWorkspace({ onFormPushed }) {
                             >
                               🔒 Lock
                             </button>
+                          ) : (
+                            <button
+                              className="btn-secondary"
+                              onClick={() => handleUnlockForm(entry.id)}
+                              style={{ fontSize: 11, padding: '4px 8px' }}
+                              title="Unlock Form with Audit Reason"
+                            >
+                              🔓 Unlock
+                            </button>
                           )}
+                          <button
+                            className="btn-secondary"
+                            onClick={() => handleFreezeForm(entry)}
+                            style={{ fontSize: 11, padding: '4px 8px' }}
+                            title="Freeze / Unfreeze Form"
+                          >
+                            {entry.is_frozen ? '🔥 Unfreeze' : '❄️ Freeze'}
+                          </button>
                           <button
                             className="btn-primary"
                             onClick={() => handlePushToETMF(entry)}

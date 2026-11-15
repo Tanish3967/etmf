@@ -558,6 +558,9 @@ export async function initDB() {
   addColumn('forms_data', 'is_locked', 'INTEGER DEFAULT 0');
   addColumn('forms_data', 'locked_by', 'TEXT');
   addColumn('forms_data', 'locked_at', 'TEXT');
+  addColumn('forms_data', 'is_frozen', 'INTEGER DEFAULT 0');
+  addColumn('forms_data', 'frozen_by', 'TEXT');
+  addColumn('forms_data', 'frozen_at', 'TEXT');
   addColumn('forms_schemas', 'zone', "TEXT DEFAULT '05'");
   addColumn('forms_schemas', 'section', "TEXT DEFAULT '05.02'");
   addColumn('forms_schemas', 'artifact_code', "TEXT DEFAULT '05.02.01'");

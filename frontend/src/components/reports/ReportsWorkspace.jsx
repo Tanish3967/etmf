@@ -19,6 +19,7 @@ export default function ReportsWorkspace() {
   const [auditData, setAuditData] = useState(null);
   const [auditFilterAction, setAuditFilterAction] = useState("");
   const [inactivatedData, setInactivatedData] = useState(null);
+  const [genericReportData, setGenericReportData] = useState(null);
 
   // Load Studies on Mount
   useEffect(() => {
@@ -70,6 +71,9 @@ export default function ReportsWorkspace() {
       } else if (activeTab === "inactivated") {
         const res = await api.get("/reports/inactivated");
         setInactivatedData(res.data);
+      } else {
+        const res = await api.get(`/reports/${activeTab}?studyId=${selectedStudy}`);
+        setGenericReportData(res.data);
       }
     } catch (err) {
       console.error("Error fetching report data:", err);
@@ -100,14 +104,26 @@ export default function ReportsWorkspace() {
   };
 
   const tabs = [
-    { id: "completeness", label: "TMF Completeness (§13.3)", icon: "📊" },
-    { id: "timeliness", label: "Timeliness & SLA (§13.19)", icon: "⏱️" },
-    { id: "expiry", label: "Document Expiry (§13.11)", icon: "📅" },
-    { id: "workflow", label: "Workflow Distribution (§13.12)", icon: "🔄" },
-    { id: "blinded", label: "Blinded vs Unblinded (§13.14)", icon: "🔒" },
-    { id: "inventory", label: "System Inventory (§13.17)", icon: "📁" },
-    { id: "audit", label: "Audit Trail Log (§13.18)", icon: "📜" },
-    { id: "inactivated", label: "Inactivated Docs (§13.20)", icon: "🚫" },
+    { id: "completeness", label: "TMF Completeness (§11.4)", icon: "📊" },
+    { id: "timeliness", label: "Timeliness & SLA (§11.20)", icon: "⏱️" },
+    { id: "expiry", label: "Document Expiry (§11.8)", icon: "📅" },
+    { id: "workflow", label: "Workflow Status (§11.10)", icon: "🔄" },
+    { id: "blinded", label: "Blinded vs Unblinded (§11.3)", icon: "🔒" },
+    { id: "inventory", label: "System Inventory (§11.13)", icon: "📁" },
+    { id: "audit", label: "Audit Trail Log (§11.1)", icon: "📜" },
+    { id: "inactivated", label: "Inactivated Docs (§11.12)", icon: "🚫" },
+    { id: "application-users", label: "Application Users (§11.2)", icon: "👥" },
+    { id: "compliance", label: "Compliance Report (§11.5)", icon: "✅" },
+    { id: "controlled-documents", label: "Controlled Docs (§11.6)", icon: "📥" },
+    { id: "copy-log", label: "Document Copy Log (§11.7)", icon: "📋" },
+    { id: "exports", label: "Document Exports (§11.9)", icon: "📦" },
+    { id: "move-log", label: "Document Move Log (§11.11)", icon: "📂" },
+    { id: "folder-history", label: "Folder History (§11.14)", icon: "🗂️" },
+    { id: "notes", label: "Sticky Notes Report (§11.15)", icon: "📝" },
+    { id: "quality", label: "Quality Check Report (§11.16)", icon: "🔍" },
+    { id: "queries", label: "Queries Report (§11.17)", icon: "❓" },
+    { id: "removed-documents", label: "Removed Documents (§11.18)", icon: "🗑️" },
+    { id: "scheduled-jobs", label: "Scheduled Jobs (§11.19)", icon: "⚙️" },
   ];
 
   return (
@@ -775,6 +791,61 @@ export default function ReportsWorkspace() {
                 </tbody>
               </table>
             )}
+          </div>
+        )}
+
+        {/* 9-20. EXTENDED CLINEVO CLINICAL REPORTS SUITE */}
+        {!["completeness", "timeliness", "expiry", "workflow", "blinded", "inventory", "audit", "inactivated"].includes(activeTab) && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "#1e293b" }}>
+                {genericReportData?.report || tabs.find(t => t.id === activeTab)?.label || "Clinical Report"}
+              </h3>
+              <button
+                onClick={() => {
+                  const arr = genericReportData?.users || genericReportData?.documents || genericReportData?.downloads || genericReportData?.copies || genericReportData?.exports || genericReportData?.tracking || genericReportData?.history || genericReportData?.stickyNotes || genericReportData?.qcEvents || genericReportData?.queries || genericReportData?.removed || genericReportData?.jobs || [];
+                  exportToCSV(arr, activeTab);
+                }}
+                style={{ padding: "6px 12px", background: "#0284c7", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+              >
+                📥 Export CSV
+              </button>
+            </div>
+            {loading ? (
+              <div style={{ padding: 30, textAlign: "center", color: "#64748b" }}>Generating Report...</div>
+            ) : (() => {
+              const rows = genericReportData?.users || genericReportData?.documents || genericReportData?.downloads || genericReportData?.copies || genericReportData?.exports || genericReportData?.tracking || genericReportData?.history || genericReportData?.stickyNotes || genericReportData?.qcEvents || genericReportData?.queries || genericReportData?.removed || genericReportData?.jobs || [];
+              if (!rows.length) {
+                return (
+                  <div style={{ padding: 24, textAlign: "center", color: "#64748b", background: "#f8fafc", borderRadius: 8 }}>
+                    No records found for this report criteria.
+                  </div>
+                );
+              }
+              const cols = Object.keys(rows[0]).slice(0, 7);
+              return (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+                        {cols.map(c => (
+                          <th key={c} style={{ padding: "10px 12px", color: "#475569", textTransform: "uppercase", fontSize: 11 }}>{c.replace(/_/g, " ")}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.slice(0, 100).map((r, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                          {cols.map(c => (
+                            <td key={c} style={{ padding: "8px 12px", color: "#334155" }}>{String(r[c] ?? "—")}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
