@@ -78,7 +78,18 @@ userRoutes.use(requireAuth);
 
 userRoutes.get('/', (req, res) => {
   const db = getDB();
-  const users = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, last_login, created_at FROM users WHERE tenant_id = ? ORDER BY name').all(req.tenantId);
+  const { search, status, authType } = req.query;
+  let where = ['tenant_id = ?'];
+  const params = [req.tenantId];
+  if (status === 'active' || status === '1') { where.push('active = 1'); }
+  if (status === 'inactive' || status === '0') { where.push('active = 0'); }
+  if (authType) { where.push("COALESCE(auth_type, 'DB') = ?"); params.push(authType); }
+  if (search) {
+    where.push('(name LIKE ? OR email LIKE ? OR COALESCE(username, email) LIKE ? OR COALESCE(first_name, \'\') LIKE ? OR COALESCE(last_name, \'\') LIKE ?)');
+    const q = `%${search}%`;
+    params.push(q, q, q, q, q);
+  }
+  const users = db.prepare(`SELECT id, name, username, first_name, last_name, email, role, dept, designation, description, COALESCE(auth_type, 'DB') as auth_type, active, must_change_password, mfa_enabled, last_login, created_at FROM users WHERE ${where.join(' AND ')} ORDER BY name`).all(...params);
   const ufrStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
   users.forEach(u => {
     u.functional_roles = ufrStmt.all(u.id).map(r => r.role_id);
@@ -88,28 +99,29 @@ userRoutes.get('/', (req, res) => {
 
 userRoutes.post('/', requireCap('canAdmin'), async (req, res) => {
   const db = getDB();
-  const { name, username, email, role, dept, designation, description, password, active = 1, functional_roles = [] } = req.body;
-  const userName = name || username;
+  const { name, username, first_name, last_name, email, role, dept, designation, description, auth_type = 'DB', password, active = 1, functional_roles = [] } = req.body;
+  const userName = name || username || [first_name, last_name].filter(Boolean).join(' ');
+  const loginUsername = username || email;
   if (!userName || !email) return res.status(400).json({ error: 'Name and email required' });
   const existing = db.prepare('SELECT id FROM users WHERE tenant_id = ? AND email = ?').get(req.tenantId, email);
   if (existing) return res.status(409).json({ error: `User with email ${email} already exists` });
   const id = uuid();
   const pwHash = await bcrypt.hash(password || 'Admin1234!', 12);
-  db.prepare('INSERT INTO users (id, tenant_id, name, email, password_hash, role, dept, designation, description, active, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, req.tenantId, userName, email, pwHash, role || 'CRA / Reviewer', dept || 'Clinical Operations', designation || '', description || '', active ? 1 : 0, req.user.name || req.user.id);
+  db.prepare('INSERT INTO users (id, tenant_id, name, username, first_name, last_name, email, password_hash, role, dept, designation, description, auth_type, active, must_change_password, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+    .run(id, req.tenantId, userName, loginUsername, first_name || '', last_name || '', email, pwHash, role || 'CRA / Reviewer', dept || 'Clinical Operations', designation || '', description || '', auth_type, active ? 1 : 0, req.user.name || req.user.id);
   if (Array.isArray(functional_roles) && functional_roles.length > 0) {
     const insRole = db.prepare('INSERT OR IGNORE INTO user_functional_roles (user_id, role_id) VALUES (?, ?)');
     functional_roles.forEach(rid => insRole.run(id, rid));
   }
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Created', objectType: 'user', objectId: id, objectName: userName, ip: req.ip });
-  const user = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, created_at FROM users WHERE id = ?').get(id);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'User Created', objectType: 'user', objectId: id, objectName: userName, detail: `Auth: ${auth_type}`, ip: req.ip });
+  const user = db.prepare('SELECT id, name, username, first_name, last_name, email, role, dept, designation, description, auth_type, active, must_change_password, mfa_enabled, created_at FROM users WHERE id = ?').get(id);
   user.functional_roles = functional_roles;
   res.status(201).json({ message: 'User created successfully', user });
 });
 
 userRoutes.get('/:id', (req, res) => {
   const db = getDB();
-  const user = db.prepare('SELECT id, name, email, role, dept, designation, description, active, mfa_enabled, last_login, created_at FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  const user = db.prepare('SELECT id, name, username, first_name, last_name, email, role, dept, designation, description, auth_type, active, must_change_password, mfa_enabled, last_login, created_at FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!user) return res.status(404).json({ error: 'User not found' });
   const ufrStmt = db.prepare('SELECT role_id FROM user_functional_roles WHERE user_id = ?');
   user.functional_roles = ufrStmt.all(user.id).map(r => r.role_id);
@@ -122,15 +134,19 @@ userRoutes.post('/:id/reset-password', requireCap('canAdmin'), async (req, res) 
   if (!user) return res.status(404).json({ error: 'User not found' });
   const newPassword = req.body.newPassword || `Clinion@${Math.floor(1000 + Math.random() * 9000)}`;
   const hash = await bcrypt.hash(newPassword, 12);
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.params.id);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Password Reset', objectType: 'user', objectId: req.params.id, objectName: user.name, detail: 'Administrator reset user password', ip: req.ip });
-  res.json({ message: 'Password reset successfully', tempPassword: newPassword });
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE id = ?').run(hash, req.params.id);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Password Reset', objectType: 'user', objectId: req.params.id, objectName: user.name, detail: 'Administrator reset user password (must_change_password=1)', ip: req.ip });
+  res.json({ message: 'Password reset successfully (temporary password requires change on next login)', tempPassword: newPassword, mustChangePassword: true });
 });
 
 userRoutes.patch('/:id', requireCap('canAdmin'), async (req, res) => {
   const db = getDB();
-  const { role, dept, active, name, email, designation, description, functional_roles } = req.body;
+  const { role, dept, active, name, username, first_name, last_name, email, designation, description, functional_roles } = req.body;
   const updates = {}; const user = db.prepare('SELECT * FROM users WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (username && user.username && username !== user.username) {
+    return res.status(400).json({ error: 'Username is immutable after creation (Clinevo eTMF §8.5.1.1)', code: 'IMMUTABLE_USERNAME' });
+  }
   if (email && email !== user.email) {
     const existing = db.prepare('SELECT id FROM users WHERE tenant_id = ? AND email = ? AND id != ?').get(req.tenantId, email, req.params.id);
     if (existing) return res.status(409).json({ error: `User with email ${email} already exists` });
@@ -140,6 +156,8 @@ userRoutes.patch('/:id', requireCap('canAdmin'), async (req, res) => {
   if (dept !== undefined) updates.dept = dept;
   if (active !== undefined) updates.active = active ? 1 : 0;
   if (name !== undefined) updates.name = name;
+  if (first_name !== undefined) updates.first_name = first_name;
+  if (last_name !== undefined) updates.last_name = last_name;
   if (email !== undefined) updates.email = email;
   if (designation !== undefined) updates.designation = designation;
   if (description !== undefined) updates.description = description;
@@ -349,6 +367,79 @@ studyRoutes.get('/:id/completeness', (req, res) => {
   });
   const overall = docs.length ? Math.round((docs.filter(d => d.status === 'Approved').length / docs.length) * 100) : 0;
   res.json({ overall, zones: Object.values(zones), totalDocs: docs.length, approved: docs.filter(d => d.status === 'Approved').length, totalPlaceholders: placeholders.length });
+});
+
+// ── GET /api/studies/:id/hierarchy — 3-Tier Dynamic Study->Country->Site->DIA Zones with 6 Status Counters (§8.7 & §8.8) ──
+studyRoutes.get('/:id/hierarchy', (req, res) => {
+  const db = getDB();
+  const studyId = req.params.id;
+  const { country, siteId } = req.query;
+
+  const study = db.prepare('SELECT * FROM studies WHERE id = ? AND tenant_id = ?').get(studyId, req.tenantId);
+  if (!study) return res.status(404).json({ error: 'Study not found' });
+
+  const sites = db.prepare('SELECT * FROM sites WHERE study_id = ? AND tenant_id = ? ORDER BY country, site_code').all(studyId, req.tenantId);
+
+  let docWhere = ['study_id = ?', 'tenant_id = ?', 'active = 1'];
+  const docParams = [studyId, req.tenantId];
+  if (country) { docWhere.push('country = ?'); docParams.push(country); }
+  if (siteId)  { docWhere.push('site_id = ?'); docParams.push(siteId); }
+
+  const docs = db.prepare(`SELECT id, artifact_code, artifact_name, zone, zone_label, section, section_label, status, mandatory, country, site_id, is_pinned FROM documents WHERE ${docWhere.join(' AND ')}`).all(...docParams);
+  const placeholders = db.prepare('SELECT * FROM placeholders WHERE study_id = ? AND tenant_id = ?').all(studyId, req.tenantId);
+  const folderConfigs = db.prepare('SELECT * FROM folder_configs WHERE study_id = ? AND tenant_id = ?').all(studyId, req.tenantId);
+
+  const computeCounters = (nodeDocs, nodePlaceholders) => {
+    const total = nodeDocs.length;
+    const completed = nodeDocs.filter(d => ['Approved', 'Published', 'Signed Off'].includes(d.status)).length;
+    const inQc = nodeDocs.filter(d => ['Pending Review', 'Under Review', 'Review Complete', 'More Info Requested'].includes(d.status)).length;
+    const inProgress = nodeDocs.filter(d => ['Draft', 'Pending Approval', 'Pending Signoff', 'Pending Publish'].includes(d.status)).length;
+    const expected = nodePlaceholders.filter(p => !p.na_designated).length;
+    const filedCodes = new Set(nodeDocs.map(d => d.artifact_code));
+    const missing = nodePlaceholders.filter(p => p.mandatory && !p.na_designated && !filedCodes.has(p.artifact_code)).length;
+    return { total, completed, inProgress, inQc, missing, expected };
+  };
+
+  // Group countries & sites
+  const countriesMap = {};
+  sites.forEach(s => {
+    if (!countriesMap[s.country]) countriesMap[s.country] = [];
+    countriesMap[s.country].push(s);
+  });
+
+  // Compute zone-level & section-level counters across all 11 DIA Zones
+  const zoneCodes = ['01','02','03','04','05','06','07','08','09','10','11'];
+  const zoneSummaries = zoneCodes.map(zCode => {
+    const zDocs = docs.filter(d => d.zone === zCode || (d.artifact_code && d.artifact_code.startsWith(zCode)));
+    const zPhs = placeholders.filter(p => p.zone === zCode || (p.artifact_code && p.artifact_code.startsWith(zCode)));
+    const fCfg = folderConfigs.find(f => f.path === zCode || f.path.startsWith(`${zCode}/`));
+    let pinnedUserIds = [];
+    try { pinnedUserIds = JSON.parse(fCfg?.pinned_user_ids || '[]'); } catch (e) {}
+    return {
+      zone: zCode,
+      counters: computeCounters(zDocs, zPhs),
+      locked: Boolean(fCfg?.locked),
+      pinnedEnterprise: Boolean(fCfg?.pinned_enterprise),
+      pinnedUser: pinnedUserIds.includes(req.user.id),
+      milestoneDate: fCfg?.milestone_date || null,
+    };
+  });
+
+  res.json({
+    study: {
+      id: study.id,
+      protocolNumber: study.protocol_number,
+      title: study.title,
+      locked: Boolean(study.locked),
+      counters: computeCounters(docs, placeholders),
+    },
+    countries: Object.entries(countriesMap).map(([cName, cSites]) => ({
+      country: cName,
+      sites: cSites,
+    })),
+    zones: zoneSummaries,
+    folderConfigs,
+  });
 });
 
 studyRoutes.post('/:id/archive', requireCap('canAdmin'), (req, res) => {
@@ -1220,79 +1311,149 @@ folderRoutes.post('/', requireCap('canAdmin'), (req, res) => {
   }
 });
 
-folderRoutes.patch('/:id/lock', requireCap('canLock'), (req, res) => {
+const resolveOrCreateFolderConfig = (db, folderIdOrCode, tenantId, studyId = 'study-001') => {
+  let folder = db.prepare('SELECT * FROM folder_configs WHERE (id = ? OR path = ?) AND tenant_id = ?').get(folderIdOrCode, folderIdOrCode, tenantId);
+  if (!folder) {
+    const id = folderIdOrCode.startsWith('f-') || folderIdOrCode.startsWith('zone-') || folderIdOrCode.startsWith('sec-') ? folderIdOrCode : `f-${folderIdOrCode}`;
+    const path = folderIdOrCode.replace(/^zone-|^sec-|^f-/, '') || '01';
+    db.prepare('INSERT OR IGNORE INTO folder_configs (id, tenant_id, study_id, path, allowed_groups, dist_list) VALUES (?, ?, ?, ?, \'[]\', \'[]\')')
+      .run(id, tenantId, studyId, path);
+    folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(id, tenantId);
+  }
+  return folder;
+};
+
+const handleFolderLock = (req, res) => {
   const db = getDB();
-  const { locked } = req.body;
-  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId, req.body?.studyId);
   if (!folder) return res.status(404).json({ error: 'Folder not found' });
-  
-  const isLocked = locked ? 1 : 0;
+
+  const isLocked = req.body?.locked !== undefined ? (req.body.locked ? 1 : 0) : (folder.locked ? 0 : 1);
   db.prepare(`UPDATE folder_configs SET locked = ?, locked_by = ?, locked_at = ${isLocked ? "datetime('now')" : "NULL"} WHERE id = ?`)
-    .run(isLocked, isLocked ? req.user.id : null, req.params.id);
-  
-  appendAudit({ tenantId: req.tenantId, studyId: folder.study_id, userId: req.user.id, userName: req.user.name, action: isLocked ? 'Folder Locked' : 'Folder Unlocked', objectType: 'folder', objectId: req.params.id, detail: folder.path, ip: req.ip });
-  res.json({ message: `Folder ${isLocked ? 'locked' : 'unlocked'}`, folder: db.prepare('SELECT * FROM folder_configs WHERE id = ?').get(req.params.id) });
+    .run(isLocked, isLocked ? req.user.id : null, folder.id);
+
+  appendAudit({ tenantId: req.tenantId, studyId: folder.study_id, userId: req.user.id, userName: req.user.name, action: isLocked ? 'Folder Locked' : 'Folder Unlocked', objectType: 'folder', objectId: folder.id, detail: folder.path, ip: req.ip });
+  res.json({ message: `Folder ${isLocked ? 'locked' : 'unlocked'}`, folder: db.prepare('SELECT * FROM folder_configs WHERE id = ?').get(folder.id) });
+};
+
+folderRoutes.patch('/:id/lock', requireCap('canLock'), handleFolderLock);
+folderRoutes.post('/:id/lock', requireCap('canLock'), handleFolderLock);
+
+folderRoutes.patch('/:id/pin', (req, res) => {
+  const db = getDB();
+  const { scope = 'user', pinned = true } = req.body;
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId, req.body?.studyId);
+  if (!folder) return res.status(404).json({ error: 'Folder not found' });
+
+  if (scope === 'enterprise') {
+    db.prepare('UPDATE folder_configs SET pinned_enterprise = ? WHERE id = ?').run(pinned ? 1 : 0, folder.id);
+  } else {
+    let userIds = [];
+    try { userIds = JSON.parse(folder.pinned_user_ids || '[]'); } catch (e) {}
+    if (pinned && !userIds.includes(req.user.id)) userIds.push(req.user.id);
+    if (!pinned) userIds = userIds.filter(u => u !== req.user.id);
+    db.prepare('UPDATE folder_configs SET pinned_user_ids = ? WHERE id = ?').run(JSON.stringify(userIds), folder.id);
+  }
+
+  appendAudit({ tenantId: req.tenantId, studyId: folder.study_id, userId: req.user.id, userName: req.user.name, action: pinned ? 'Folder Pinned' : 'Folder Unpinned', objectType: 'folder', objectId: folder.id, detail: `Scope: ${scope}`, ip: req.ip });
+  res.json({ message: `Folder ${pinned ? 'pinned' : 'unpinned'} (${scope})`, folder: db.prepare('SELECT * FROM folder_configs WHERE id = ?').get(folder.id) });
+});
+
+folderRoutes.post('/:id/assign-groups', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { groupIds = [], cascadeToChildren = true } = req.body;
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId, req.body?.studyId);
+  let existing = [];
+  try { existing = JSON.parse(folder.allowed_groups || '[]'); } catch (e) {}
+  const merged = Array.from(new Set([...existing, ...groupIds]));
+  db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE id = ?').run(JSON.stringify(merged), folder.id);
+  if (cascadeToChildren) {
+    db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE study_id = ? AND path LIKE ? AND tenant_id = ?')
+      .run(JSON.stringify(merged), folder.study_id, `${folder.path}%`, req.tenantId);
+  }
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Folder Groups Assigned', objectType: 'folder', objectId: folder.id, detail: `Groups: ${merged.join(',')} (Cascade: ${cascadeToChildren})`, ip: req.ip });
+  res.json({ message: 'User groups assigned to folder', allowedGroups: merged, cascadeToChildren });
+});
+
+folderRoutes.post('/:id/revoke-groups', requireCap('canAdmin'), (req, res) => {
+  const db = getDB();
+  const { groupIds = [], cascadeToChildren = true } = req.body;
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId, req.body?.studyId);
+  let existing = [];
+  try { existing = JSON.parse(folder.allowed_groups || '[]'); } catch (e) {}
+  const remaining = groupIds.length ? existing.filter(g => !groupIds.includes(g)) : [];
+  db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE id = ?').run(JSON.stringify(remaining), folder.id);
+  if (cascadeToChildren) {
+    db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE study_id = ? AND path LIKE ? AND tenant_id = ?')
+      .run(JSON.stringify(remaining), folder.study_id, `${folder.path}%`, req.tenantId);
+  }
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Folder Groups Revoked', objectType: 'folder', objectId: folder.id, detail: `Remaining: ${remaining.join(',')}`, ip: req.ip });
+  res.json({ message: 'Folder privileges revoked', allowedGroups: remaining });
 });
 
 folderRoutes.patch('/:id/groups', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
   const { allowedGroups } = req.body;
-  db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(allowedGroups || []), req.params.id, req.tenantId);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Folder Groups Updated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  db.prepare('UPDATE folder_configs SET allowed_groups = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(allowedGroups || []), folder.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Folder Groups Updated', objectType: 'folder', objectId: folder.id, ip: req.ip });
   res.json({ message: 'Folder groups updated' });
 });
 
 folderRoutes.patch('/:id/distribute', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
   const { distList } = req.body;
-  db.prepare('UPDATE folder_configs SET dist_list = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(distList || []), req.params.id, req.tenantId);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Distribution List Updated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  db.prepare('UPDATE folder_configs SET dist_list = ? WHERE id = ? AND tenant_id = ?').run(JSON.stringify(distList || []), folder.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Distribution List Updated', objectType: 'folder', objectId: folder.id, ip: req.ip });
   res.json({ message: 'Distribution list updated' });
 });
 
 folderRoutes.get('/:id/history', (req, res) => {
   const db = getDB();
-  const logs = db.prepare('SELECT * FROM audit_log WHERE object_type = ? AND object_id = ? AND tenant_id = ? ORDER BY created_at DESC').all('folder', req.params.id, req.tenantId);
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  const logs = db.prepare('SELECT * FROM audit_log WHERE object_type = ? AND object_id = ? AND tenant_id = ? ORDER BY created_at DESC').all('folder', folder.id, req.tenantId);
   res.json({ history: logs });
 });
 
 folderRoutes.get('/:id/inventory', (req, res) => {
   const db = getDB();
-  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
-  if (!folder) return res.status(404).json({ error: 'Folder not found' });
-  
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  const recursive = req.query.recursive !== 'false';
   const [zone, section] = folder.path.split('/');
-  const docCount = db.prepare('SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND tenant_id = ?').get(folder.study_id, zone, section || '', req.tenantId).c;
-  const approvedCount = db.prepare("SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND status = 'Approved' AND tenant_id = ?").get(folder.study_id, zone, section || '', req.tenantId).c;
-  
-  res.json({ inventory: { total: docCount, approved: approvedCount, pending: docCount - approvedCount } });
+  const docCount = recursive
+    ? db.prepare('SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND (zone = ? OR artifact_code LIKE ?) AND tenant_id = ?').get(folder.study_id, zone, `${zone}%`, req.tenantId).c
+    : db.prepare('SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND tenant_id = ?').get(folder.study_id, zone, section || '', req.tenantId).c;
+  const approvedCount = recursive
+    ? db.prepare("SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND (zone = ? OR artifact_code LIKE ?) AND status IN ('Approved','Published') AND tenant_id = ?").get(folder.study_id, zone, `${zone}%`, req.tenantId).c
+    : db.prepare("SELECT COUNT(*) as c FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND status IN ('Approved','Published') AND tenant_id = ?").get(folder.study_id, zone, section || '', req.tenantId).c;
+
+  res.json({ inventory: { total: docCount, approved: approvedCount, pending: docCount - approvedCount, recursive } });
 });
 
 folderRoutes.patch('/:id/milestone', requireCap('canAdmin'), (req, res) => {
   const db = getDB();
-  const { milestoneDate } = req.body;
-  // Assumes we alter folder_configs to have milestone_date, or use metadata JSON. We will add milestone_date column.
-  try { db.prepare('ALTER TABLE folder_configs ADD COLUMN milestone_date TEXT').run(); } catch(e){}
-  db.prepare('UPDATE folder_configs SET milestone_date = ? WHERE id = ? AND tenant_id = ?').run(milestoneDate || null, req.params.id, req.tenantId);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Milestone Updated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
-  res.json({ message: 'Milestone date updated' });
+  const { milestoneDate, actualMilestoneDate } = req.body;
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  db.prepare('UPDATE folder_configs SET milestone_date = COALESCE(?, milestone_date), actual_milestone_date = COALESCE(?, actual_milestone_date) WHERE id = ? AND tenant_id = ?')
+    .run(milestoneDate || null, actualMilestoneDate || null, folder.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Milestone Updated', objectType: 'folder', objectId: folder.id, detail: `Planned: ${milestoneDate || 'N/A'}, Actual: ${actualMilestoneDate || 'N/A'}`, ip: req.ip });
+  res.json({ message: 'Milestone dates updated', folder: db.prepare('SELECT * FROM folder_configs WHERE id = ?').get(folder.id) });
 });
 
 folderRoutes.get('/:id/export', (req, res) => {
   const db = getDB();
-  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
-  if (!folder) return res.status(404).json({ error: 'Folder not found' });
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Exported', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Exported', objectType: 'folder', objectId: folder.id, ip: req.ip });
   res.json({ message: 'Folder export archive generated', downloadUrl: `/downloads/export-${folder.id}-${Date.now()}.zip` });
 });
 
 folderRoutes.get('/:id/tmf-index', (req, res) => {
   const db = getDB();
-  const folder = db.prepare('SELECT * FROM folder_configs WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
-  if (!folder) return res.status(404).json({ error: 'Folder not found' });
-  const [zone, section] = folder.path.split('/');
-  const docs = db.prepare('SELECT id, artifact_code, artifact_name, title, version, status, effective_date FROM documents WHERE study_id = ? AND zone = ? AND section = ? AND tenant_id = ?').all(folder.study_id, zone, section || '', req.tenantId);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'TMF Index Generated', objectType: 'folder', objectId: req.params.id, ip: req.ip });
+  const folder = resolveOrCreateFolderConfig(db, req.params.id, req.tenantId);
+  const [zone] = folder.path.split('/');
+  const docs = db.prepare('SELECT id, artifact_code, artifact_name, title, version, status, effective_date FROM documents WHERE study_id = ? AND (zone = ? OR ? = \'01\') AND tenant_id = ?').all(folder.study_id, zone, zone, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'TMF Index Generated', objectType: 'folder', objectId: folder.id, ip: req.ip });
   res.json({ message: 'TMF Index generated', index: docs });
 });
 

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../../api';
 
 export const DIA_TMF_ZONES = [
   {
@@ -107,8 +108,21 @@ export const DIA_TMF_ZONES = [
 
 export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }) {
   const [search, setSearch] = useState('');
+  const [sortOrder, setSortOrder] = useState('asc'); // 'asc' | 'desc'
+  const [scopeCountry, setScopeCountry] = useState('');
+  const [scopeSite, setScopeSite] = useState('');
+  const [hierarchyData, setHierarchyData] = useState(null);
   const [expandedZones, setExpandedZones] = useState({ "zone-01": true, "zone-02": true });
   const [expandedSections, setExpandedSections] = useState({ "sec-02.01": true });
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (scopeCountry) params.set('country', scopeCountry);
+    if (scopeSite) params.set('siteId', scopeSite);
+    api.get(`/studies/study-001/hierarchy?${params.toString()}`)
+      .then(res => setHierarchyData(res.data))
+      .catch(() => {});
+  }, [scopeCountry, scopeSite]);
 
   // Auto-expand tree to reveal and highlight the selected node whenever selectedNode changes
   useEffect(() => {
@@ -143,9 +157,20 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
     return text.toLowerCase().includes(search.toLowerCase());
   };
 
+  const zoneCountersMap = {};
+  if (hierarchyData?.zones) {
+    hierarchyData.zones.forEach(z => {
+      zoneCountersMap[z.zone] = z;
+    });
+  }
+
+  const sortedZones = [...DIA_TMF_ZONES].sort((a, b) =>
+    sortOrder === 'asc' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name)
+  );
+
   return (
     <div style={{
-      width: 310,
+      width: 330,
       background: '#fff',
       borderRight: '1px solid #e2e8f0',
       display: 'flex',
@@ -153,36 +178,89 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
       height: '100%',
       userSelect: 'none'
     }}>
-      {/* Search Header */}
-      <div style={{ padding: '14px 16px', borderBottom: '1px solid #f1f5f9' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+      {/* Search & 3-Tier Study/Country/Site Scope Header (§8.7) */}
+      <div style={{ padding: '12px 14px', borderBottom: '1px solid #f1f5f9' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', letterSpacing: -0.3 }}>
             📁 DIA TMF Model v3.2
           </div>
-          <button
-            onClick={() => {
-              const allExpanded = Object.keys(expandedZones).length > 5;
-              if (allExpanded) {
-                setExpandedZones({});
-                setExpandedSections({});
-              } else {
-                const z = {};
-                DIA_TMF_ZONES.forEach(zone => { z[zone.id] = true; });
-                setExpandedZones(z);
-              }
-            }}
-            style={{ fontSize: 11, background: '#f1f5f9', border: 'none', borderRadius: 4, padding: '3px 8px', cursor: 'pointer', color: '#64748b', fontWeight: 600 }}
-          >
-            {Object.keys(expandedZones).length > 5 ? 'Collapse All' : 'Expand All'}
-          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button
+              type="button"
+              onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+              style={{ fontSize: 10.5, background: '#f1f5f9', border: 'none', borderRadius: 4, padding: '3px 7px', cursor: 'pointer', color: '#475569', fontWeight: 600 }}
+              title="Sort Folders A-Z / Z-A"
+            >
+              {sortOrder === 'asc' ? 'A→Z' : 'Z→A'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const allExpanded = Object.keys(expandedZones).length > 5;
+                if (allExpanded) {
+                  setExpandedZones({});
+                  setExpandedSections({});
+                } else {
+                  const z = {};
+                  DIA_TMF_ZONES.forEach(zone => { z[zone.id] = true; });
+                  setExpandedZones(z);
+                }
+              }}
+              style={{ fontSize: 10.5, background: '#f1f5f9', border: 'none', borderRadius: 4, padding: '3px 7px', cursor: 'pointer', color: '#64748b', fontWeight: 600 }}
+            >
+              {Object.keys(expandedZones).length > 5 ? 'Collapse' : 'Expand'}
+            </button>
+          </div>
         </div>
+
+        {/* 3-Tier Study -> Country -> Site Selector (§8.7) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
+          <select
+            className="modern-input"
+            value={scopeCountry}
+            onChange={e => { setScopeCountry(e.target.value); setScopeSite(''); }}
+            style={{ fontSize: 11, padding: '4px 6px', height: 28 }}
+            title="Filter Hierarchy by Country"
+          >
+            <option value="">🌍 All Countries</option>
+            {(hierarchyData?.countries || []).map(c => (
+              <option key={c.country} value={c.country}>{c.country}</option>
+            ))}
+          </select>
+          <select
+            className="modern-input"
+            value={scopeSite}
+            onChange={e => setScopeSite(e.target.value)}
+            style={{ fontSize: 11, padding: '4px 6px', height: 28 }}
+            title="Filter Hierarchy by Site"
+          >
+            <option value="">🏥 All Sites</option>
+            {(hierarchyData?.countries || [])
+              .filter(c => !scopeCountry || c.country === scopeCountry)
+              .flatMap(c => c.sites || [])
+              .map(s => (
+                <option key={s.id} value={s.id}>{s.site_code} ({s.name})</option>
+              ))}
+          </select>
+        </div>
+
         <input
           className="modern-input"
           placeholder="Filter zones & artifacts..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          style={{ width: '100%', padding: '6px 10px', fontSize: 12, height: 32 }}
+          style={{ width: '100%', padding: '6px 10px', fontSize: 12, height: 30 }}
         />
+
+        {/* 6-Metric Legend Bar (§8.7) */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 9.5, color: '#64748b', fontWeight: 600 }}>
+          <span title="Total Records">T: Total</span>
+          <span style={{ color: '#059669' }} title="Completed / Approved">C: Done</span>
+          <span style={{ color: '#0284c7' }} title="In Progress">IP: Work</span>
+          <span style={{ color: '#d97706' }} title="In QC Review">QC: Rev</span>
+          <span style={{ color: '#dc2626' }} title="Missing Mandatory EDL">M: Miss</span>
+          <span style={{ color: '#6366f1' }} title="Expected EDL">E: Exp</span>
+        </div>
       </div>
 
       {/* Tree Content */}
@@ -190,28 +268,38 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
         {/* All Documents Root Option */}
         <div
           onClick={() => onSelectNode(null)}
-          onContextMenu={(e) => onContextMenu(e, { type: 'root', name: 'Master eTMF Root', code: '00' })}
+          onContextMenu={(e) => onContextMenu(e, { type: 'root', name: 'Master eTMF Root (TRIAL-2024-001)', code: '00' })}
           style={{
-            padding: '7px 12px',
+            padding: '7px 10px',
             borderRadius: 6,
-            fontSize: 12.5,
-            fontWeight: !selectedNode ? 700 : 500,
+            fontSize: 12,
+            fontWeight: !selectedNode ? 700 : 600,
             color: !selectedNode ? '#0284c7' : '#334155',
             background: !selectedNode ? '#e0f2fe' : 'transparent',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: 8,
+            justifyContent: 'space-between',
+            gap: 6,
             marginBottom: 4
           }}
         >
-          <span>🗂️</span>
-          <span>All Documents & Artifacts</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>🗂️</span>
+            <span>TRIAL-2024-001 Root</span>
+          </div>
+          {hierarchyData?.study?.counters && (
+            <span style={{ fontSize: 10, background: '#f1f5f9', padding: '2px 6px', borderRadius: 6, color: '#334155' }}>
+              {hierarchyData.study.counters.total}/{hierarchyData.study.counters.expected || 0}
+            </span>
+          )}
         </div>
 
-        {DIA_TMF_ZONES.filter(z => matchesSearch(z.name) || z.sections.some(s => matchesSearch(s.name) || s.artifacts.some(a => matchesSearch(a)))).map(zone => {
+        {sortedZones.filter(z => matchesSearch(z.name) || z.sections.some(s => matchesSearch(s.name) || s.artifacts.some(a => matchesSearch(a)))).map(zone => {
           const isZoneExpanded = expandedZones[zone.id] || Boolean(search.trim());
           const isZoneSelected = selectedNode?.type === 'zone' && selectedNode?.id === zone.id;
+          const zInfo = zoneCountersMap[zone.code];
+          const c = zInfo?.counters || { total: 0, completed: 0, inProgress: 0, inQc: 0, missing: 0, expected: zone.sections.length };
 
           return (
             <div key={zone.id} style={{ marginBottom: 2 }}>
@@ -223,33 +311,47 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
                 }}
                 onContextMenu={(e) => onContextMenu(e, { type: 'zone', ...zone })}
                 style={{
-                  padding: '6px 10px',
+                  padding: '6px 8px',
                   borderRadius: 6,
-                  fontSize: 12,
+                  fontSize: 11.5,
                   fontWeight: 600,
                   color: isZoneSelected ? '#0284c7' : '#1e293b',
                   background: isZoneSelected ? '#e0f2fe' : 'transparent',
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6
+                  gap: 5
                 }}
               >
-                <span style={{ fontSize: 10, width: 12, color: '#94a3b8' }}>
+                <span style={{ fontSize: 9, width: 10, color: '#94a3b8' }}>
                   {isZoneExpanded ? '▼' : '▶'}
                 </span>
-                <span>📂</span>
+                <span>{zInfo?.locked ? '🔒' : '📂'}</span>
                 <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {zone.name}
                 </span>
-                <span style={{ fontSize: 10, background: '#f1f5f9', color: '#64748b', padding: '1px 5px', borderRadius: 10 }}>
-                  {zone.sections.length}
+                {zInfo?.pinnedEnterprise && <span title="Enterprise Pinned Folder" style={{ fontSize: 10 }}>📌</span>}
+                {zInfo?.pinnedUser && <span title="User Pinned Folder" style={{ fontSize: 10 }}>⭐</span>}
+                {/* 6-Status Pill Counter Badge (§8.7) */}
+                <span
+                  style={{
+                    fontSize: 9.5,
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    color: '#475569',
+                    padding: '1px 5px',
+                    borderRadius: 6,
+                    fontFamily: 'monospace'
+                  }}
+                  title={`Total:${c.total} | Completed:${c.completed} | InProgress:${c.inProgress} | QC:${c.inQc} | Missing:${c.missing} | Expected:${c.expected}`}
+                >
+                  {c.total}|{c.completed}|{c.inQc}
                 </span>
               </div>
 
               {/* Sections List */}
               {isZoneExpanded && (
-                <div style={{ marginLeft: 16, borderLeft: '1px solid #e2e8f0', paddingLeft: 6 }}>
+                <div style={{ marginLeft: 14, borderLeft: '1px solid #e2e8f0', paddingLeft: 6 }}>
                   {zone.sections.filter(s => matchesSearch(s.name) || s.artifacts.some(a => matchesSearch(a))).map(sec => {
                     const isSecExpanded = expandedSections[sec.id] || Boolean(search.trim());
                     const isSecSelected = selectedNode?.type === 'section' && selectedNode?.id === sec.id;
@@ -266,7 +368,7 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
                           style={{
                             padding: '5px 8px',
                             borderRadius: 6,
-                            fontSize: 11.5,
+                            fontSize: 11,
                             fontWeight: isSecSelected ? 700 : 500,
                             color: isSecSelected ? '#0284c7' : '#334155',
                             background: isSecSelected ? '#f0f9ff' : 'transparent',
@@ -287,7 +389,7 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
 
                         {/* Artifact Items */}
                         {isSecExpanded && (
-                          <div style={{ marginLeft: 16, paddingLeft: 4 }}>
+                          <div style={{ marginLeft: 14, paddingLeft: 4 }}>
                             {sec.artifacts.filter(matchesSearch).map((art, aIdx) => {
                               const artCode = art.split(' ')[0];
                               const isArtSelected = selectedNode?.type === 'artifact' && (selectedNode?.code === artCode || selectedNode?.name === art);
@@ -307,7 +409,7 @@ export default function FolderTree({ selectedNode, onSelectNode, onContextMenu }
                                   style={{
                                     padding: '4px 8px',
                                     borderRadius: 4,
-                                    fontSize: 11,
+                                    fontSize: 10.5,
                                     color: isArtSelected ? '#0284c7' : '#64748b',
                                     fontWeight: isArtSelected ? 700 : 400,
                                     background: isArtSelected ? '#e0f2fe' : 'transparent',
