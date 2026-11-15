@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node tests/run.js && node tests/phase1_compliance_test.js && node tests/phase2_workflow_sla_test.js"
+    "test": "node tests/run.js && node tests/phase1_compliance_test.js && node tests/phase2_workflow_sla_test.js && node tests/phase3_repository_hierarchy_test.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

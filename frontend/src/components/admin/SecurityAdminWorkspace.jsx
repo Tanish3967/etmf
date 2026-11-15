@@ -147,7 +147,7 @@ export default function SecurityAdminWorkspace() {
   }, []);
 
   // ── USER MANAGEMENT HANDLERS ───────────────────────────────────────
-  const handleOpenAddUser = () => {
+  const handleOpenAddUser = (authType = 'DB') => {
     setEditingUser(null);
     setUserFormData({
       name: '',
@@ -156,6 +156,7 @@ export default function SecurityAdminWorkspace() {
       dept: 'Clinical Operations',
       designation: '',
       description: '',
+      auth_type: authType,
       password: '',
       active: true,
       functional_roles: []
@@ -202,6 +203,7 @@ export default function SecurityAdminWorkspace() {
           dept: userFormData.dept,
           designation: userFormData.designation,
           description: userFormData.description,
+          auth_type: userFormData.auth_type || 'DB',
           password: userFormData.password || 'Clinion@123',
           active: userFormData.active,
           functional_roles: userFormData.functional_roles
@@ -509,7 +511,7 @@ export default function SecurityAdminWorkspace() {
             transition: 'all 0.15s ease'
           }}
         >
-          <span>🎖️ Functional Roles (21 Standard Roles)</span>
+          <span>🎖️ Functional Roles (24 Standard Roles)</span>
           <span style={{ background: '#e0f2fe', color: '#0284c7', padding: '2px 8px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>
             {functionalRoles.length}
           </span>
@@ -550,13 +552,24 @@ export default function SecurityAdminWorkspace() {
               </select>
             </div>
 
-            <button
-              onClick={handleOpenAddUser}
-              className="btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 18px', fontSize: 13 }}
-            >
-              <span>+</span> Add New User (§8.5.1.1)
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => handleOpenAddUser('AD')}
+                className="btn-secondary"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', fontSize: 13 }}
+              >
+                <span>🏢</span> + Add AD User
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenAddUser('DB')}
+                className="btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 18px', fontSize: 13 }}
+              >
+                <span>+</span> Add New User (§8.5.1.1)
+              </button>
+            </div>
           </div>
 
           {/* USERS TABLE */}

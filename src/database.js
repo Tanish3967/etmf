@@ -563,9 +563,14 @@ export async function initDB() {
   addColumn('forms_schemas', 'artifact_code', "TEXT DEFAULT '05.02.01'");
 
   // Phase 5: Security & Application Administration Enhancements (§8.5)
+  addColumn('users', 'auth_type', "TEXT DEFAULT 'DB'");
   addColumn('user_groups', 'privileges', "TEXT DEFAULT '[]'");
   addColumn('user_groups', 'folder_assignments', "TEXT DEFAULT '[]'");
   addColumn('studies', 'countries', "TEXT DEFAULT '[]'");
+  addColumn('folder_configs', 'milestone_date', 'TEXT');
+  addColumn('folder_configs', 'actual_milestone_date', 'TEXT');
+  addColumn('folder_configs', 'pinned_user_ids', "TEXT DEFAULT '[]'");
+  addColumn('folder_configs', 'pinned_enterprise', 'INTEGER DEFAULT 0');
   addColumn('placeholders', 'folder_id', 'TEXT REFERENCES folder_configs(id)');
   addColumn('placeholders', 'zone_label', 'TEXT');
   addColumn('placeholders', 'section_label', 'TEXT');
@@ -780,7 +785,32 @@ async function seedSecurityAndAdminData(db) {
     { id: 'frole-018', name: 'IRB / Ethics Committee Coordinator', description: 'Coordinates central and institutional ethics committee approvals', caps: ['canView', 'canUpload', 'canApprove'] },
     { id: 'frole-019', name: 'Clinical Laboratory Specialist', description: 'Maintains laboratory accreditations (CLIA/CAP) and reference ranges', caps: ['canView', 'canUpload'] },
     { id: 'frole-020', name: 'Regulatory Submissions Lead', description: 'Compiles and files IND, CTA, and NDA regulatory dossier submissions', caps: ['canView', 'canUpload', 'canReview', 'canApprove'] },
-    { id: 'frole-021', name: 'System Administrator', description: 'Administers enterprise security, users, role permissions, and eTMF setup', caps: ['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin', 'canLock'] }
+    { id: 'frole-021', name: 'System Administrator', description: 'Administers enterprise security, users, role permissions, and eTMF setup', caps: ['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin', 'canLock'] },
+    // 24 Standard Clinevo Functional Role Codes (§8.5.1.3 & §8.5.1.4)
+    { id: 'frole-c01', name: 'APPLICATION_ADMIN', description: 'Clinevo Application Administrator role', caps: ['canView', 'canAdmin'] },
+    { id: 'frole-c02', name: 'APPROVER', description: 'Clinevo Document Approver role', caps: ['canView', 'canApprove'] },
+    { id: 'frole-c03', name: 'ARCHIVAL', description: 'Clinevo Study Archival & Retention role', caps: ['canView', 'canLock'] },
+    { id: 'frole-c04', name: 'AUDIT_FINAL_REPORT_APPROVER', description: 'Approves final QA audit reports', caps: ['canView', 'canApprove'] },
+    { id: 'frole-c05', name: 'AUDIT_FINDINGS_RESOLVER', description: 'Resolves audit findings and CAPA actions', caps: ['canView', 'canUpload', 'canReview'] },
+    { id: 'frole-c06', name: 'AUDIT_MANAGER', description: 'Manages clinical quality audits', caps: ['canView', 'canReview', 'canApprove'] },
+    { id: 'frole-c07', name: 'AUTHOR', description: 'Clinevo Document Author / Uploader role', caps: ['canView', 'canUpload'] },
+    { id: 'frole-c08', name: 'BLIND_UNBLIND', description: 'Authorized to blind/unblind and view blinded records', caps: ['canView', 'canBlind'] },
+    { id: 'frole-c09', name: 'CHECKIN_ADMIN', description: 'Authorized to force uncheck / check-in locked documents', caps: ['canView', 'canAdmin'] },
+    { id: 'frole-c10', name: 'CLINICAL_HEAD', description: 'Clinical Operations Head oversight role', caps: ['canView', 'canApprove'] },
+    { id: 'frole-c11', name: 'CREATE_PLACEHOLDER', description: 'Authorized to create EDL placeholders and file plans', caps: ['canView', 'canUpload'] },
+    { id: 'frole-c12', name: 'DOWNLOAD_DOCUMENT', description: 'Authorized to download original and watermarked documents', caps: ['canView', 'canDownload'] },
+    { id: 'frole-c13', name: 'FILEMOVE_ADMIN', description: 'Authorized to move and copy documents across folders', caps: ['canView', 'canAdmin'] },
+    { id: 'frole-c14', name: 'INDEX_UPLOAD', description: 'Authorized for bulk index upload and classification', caps: ['canView', 'canUpload'] },
+    { id: 'frole-c15', name: 'LOCK_ADMIN', description: 'Authorized to lock/unlock studies and folders', caps: ['canView', 'canLock'] },
+    { id: 'frole-c16', name: 'PUBLISH_COORDINATOR', description: 'Coordinates final document publishing', caps: ['canView', 'canApprove'] },
+    { id: 'frole-c17', name: 'QC_ISSUE_TESTER', description: 'Executes quality check testing and defect verification', caps: ['canView', 'canReview'] },
+    { id: 'frole-c18', name: 'QC_MANAGER', description: 'Manages quality control queues and SLA compliance', caps: ['canView', 'canReview', 'canApprove'] },
+    { id: 'frole-c19', name: 'QUALITY_CHECK', description: 'Performs document-level quality checks', caps: ['canView', 'canReview'] },
+    { id: 'frole-c20', name: 'READ_ONLY', description: 'Read-only viewer / inspector access', caps: ['canView'] },
+    { id: 'frole-c21', name: 'REVIEWER', description: 'Clinevo Document Reviewer role', caps: ['canView', 'canReview'] },
+    { id: 'frole-c22', name: 'ROLES_ADMIN', description: 'Manages functional roles and user group permissions', caps: ['canView', 'canAdmin'] },
+    { id: 'frole-c23', name: 'SOFT_DELETE', description: 'Authorized to inactivate / soft-delete documents', caps: ['canView', 'canAdmin'] },
+    { id: 'frole-c24', name: 'SUPERUSER', description: 'Enterprise Superuser with full system privileges', caps: ['canView', 'canUpload', 'canReview', 'canApprove', 'canAdmin', 'canLock', 'canBlind'] }
   ];
 
   const insRole = db.prepare('INSERT OR IGNORE INTO functional_roles (id, tenant_id, name, description, capabilities) VALUES (?, ?, ?, ?, ?)');
