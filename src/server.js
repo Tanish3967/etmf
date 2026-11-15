@@ -15,6 +15,7 @@ import dotenv from 'dotenv';
 import { initDB } from './database.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/requestLogger.js';
+import { startScheduler } from './services/schedulerService.js';
 
 // Routes
 import authRoutes      from './routes/auth.js';
@@ -127,6 +128,8 @@ app.use(errorHandler);
 // ── Start ──────────────────────────────────────────────────
 async function start() {
   await initDB();
+  // Start background automation daemons (§8.5.2.11 & §8.5.2.12)
+  startScheduler();
   app.listen(PORT, () => {
     console.log(`\n✅ eTMF Pro API running on port ${PORT}`);
     console.log(`📋 Compliance: ICH E6(R2) | 21 CFR Part 11 | EU Annex 11`);

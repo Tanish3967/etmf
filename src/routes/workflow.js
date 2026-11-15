@@ -206,7 +206,7 @@ router.post('/:docId/transition', blockInspector, async (req, res) => {
   }
 
   // Execute transition
-  db.prepare("UPDATE documents SET status = ?, workflow_type = COALESCE(?, workflow_type) WHERE id = ?")
+  db.prepare("UPDATE documents SET status = ?, workflow_type = COALESCE(?, workflow_type), sla_reminder_1_sent_at = NULL, sla_reminder_2_sent_at = NULL, updated_at = datetime('now') WHERE id = ?")
     .run(finalState, workflowType || null, req.params.docId);
 
   // Record in workflow history
@@ -248,6 +248,13 @@ router.post('/:docId/transition', blockInspector, async (req, res) => {
     workflowId: wfId,
     autoAdvancedFrom: finalState !== nextState ? nextState : null,
   });
+});
+
+// ── GET /api/workflow/signature-reasons — active reason templates (§8.5.2.10 & 21 CFR §11.50) ──
+router.get('/signature-reasons', (req, res) => {
+  const db = getDB();
+  const reasons = db.prepare('SELECT id, reason_code, description, role_required, is_active, created_at FROM signature_reason_templates WHERE tenant_id = ? AND is_active = 1 ORDER BY created_at ASC').all(req.tenantId);
+  res.json({ reasons });
 });
 
 // ── GET /api/workflow/tasks — personalised task list (§8.2) ──

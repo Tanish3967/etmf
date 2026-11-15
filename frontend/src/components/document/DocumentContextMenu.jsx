@@ -22,7 +22,7 @@ export default function DocumentContextMenu({
     { l: "View Access History", i: "👣", ax: "access_history" },
     { l: isCheckedOut ? "Check In Document (New Version)" : "Check Out Document", i: "🔓", ax: "checkout" },
     ...(isCheckedOut ? [{ l: "Uncheck Document (Release Lock)", i: "↩️", ax: "uncheck" }] : []),
-    { l: "Quality Check (QC Checklist)", i: "✅", ax: "qc" },
+    { l: "Quality Check (Audit Plan)", i: "✅", ax: "qc" },
     { l: "Self-Assign / Claim Task", i: "🙋", ax: "self_assign" },
     { l: targetDoc.is_pinned ? "Unpin Document" : "Pin Document", i: "📌", ax: "pin" },
     { l: "Copy Document", i: "📋", ax: "copy" },
@@ -93,17 +93,7 @@ export default function DocumentContextMenu({
         alert(err.response?.data?.error || "Error releasing check-out lock");
       }
     } else if (opt.ax === 'qc') {
-      const comments = window.prompt('Quality Check (QC) Review Comments (leave prefix FAIL: to reject):', 'All pages legible, metadata verified');
-      if (comments !== null) {
-        const passed = !comments.toUpperCase().startsWith('FAIL:');
-        try {
-          await api.post(`/documents/${targetDoc.id}/quality-check`, { passed, comments, checklist: ['Legibility', 'Metadata', 'Completeness'] });
-          alert(passed ? 'Quality Check passed!' : 'Quality Check failed & query raised.');
-          onRefresh();
-        } catch (err) {
-          alert(err.response?.data?.error || 'QC failed');
-        }
-      }
+      onOpenModal({ type: 'quality_check', doc: targetDoc });
     } else if (opt.ax === 'self_assign') {
       try {
         await api.patch(`/documents/${targetDoc.id}/self-assign`, { role: 'reviewer', release: false });
@@ -158,7 +148,15 @@ export default function DocumentContextMenu({
           alert("Document record inactivated successfully.");
           onRefresh();
         } catch (err) {
-          alert(err.response?.data?.error || "Error inactivating document");
+          if (err.response?.status === 409 && err.response?.data?.code === 'AUDITED_DOC_LOCKED') {
+            alert(
+              `🔒 INACTIVATION PROHIBITED (21 CFR Part 11 & GCP Audit Trail Requirement)\n\n` +
+              `Document "${targetDoc.title}" has been formally audited in Quality Control Plan (${err.response.data.audit_plan_id || 'Active Plan'}) and is permanently locked against deletion or inactivation.\n\n` +
+              `Reason: Regulatory retention mandates preservation of all audited trial master file artifacts.`
+            );
+          } else {
+            alert(err.response?.data?.error || "Error inactivating document");
+          }
         }
       }
     }

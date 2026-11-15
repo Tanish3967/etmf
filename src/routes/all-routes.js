@@ -7,6 +7,7 @@ import { getDB, appendAudit } from '../database.js';
 import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
 import bcrypt from 'bcrypt';
 import { orchestrateDocument, DIA_V32_RESPONSE_SCHEMA, SYSTEM_INSTRUCTION } from '../services/aiOrchestrator.js';
+import { runInactiveDocumentPurge, runSlaReminderCheck, getSchedulerStatus } from '../services/schedulerService.js';
 
 export const queryRoutes = R();
 queryRoutes.use(requireAuth);
@@ -737,10 +738,31 @@ reportRoutes.get('/removed-documents', (req, res) => {
 });
 
 reportRoutes.get('/scheduled-jobs', (req, res) => {
+  const status = getSchedulerStatus();
   const jobs = [
-    { id: 'JOB-01', name: 'Document Expiry Notification Sweep', schedule: 'Daily 00:00 UTC', lastRun: new Date().toISOString(), status: 'Success' },
-    { id: 'JOB-02', name: 'SLA Escalation & Task Reminder', schedule: 'Every 6 Hours', lastRun: new Date().toISOString(), status: 'Success' },
-    { id: 'JOB-03', name: '21 CFR Part 11 Audit Integrity Check', schedule: 'Daily 02:00 UTC', lastRun: new Date().toISOString(), status: 'Success' },
+    {
+      id: 'JOB-01',
+      name: 'Document Expiry Notification Sweep',
+      schedule: 'Daily 00:00 UTC',
+      lastRun: status.purgeJob.lastRun || new Date().toISOString(),
+      status: 'Success',
+    },
+    {
+      id: 'JOB-02',
+      name: 'SLA Escalation & Task Reminder',
+      schedule: `Every ${Math.round(status.slaJob.intervalMs / 3600000)} Hours`,
+      lastRun: status.slaJob.lastRun || new Date().toISOString(),
+      status: 'Success',
+      remindersSent: status.slaJob.lastResult?.reminders_sent || 0,
+    },
+    {
+      id: 'JOB-03',
+      name: 'Inactive Document Retention Purge Daemon',
+      schedule: `Every ${Math.round(status.purgeJob.intervalMs / 3600000)} Hours`,
+      lastRun: status.purgeJob.lastRun || new Date().toISOString(),
+      status: 'Success',
+      purgedCount: status.purgeJob.lastResult?.purged_count || 0,
+    },
   ];
   res.json({ report: 'Scheduled Jobs Report', jobs, total: jobs.length, generatedAt: new Date().toISOString() });
 });
@@ -1017,13 +1039,50 @@ adminRoutes.post('/doc-types', (req, res) => {
   res.status(201).json({ message: 'Document type mapped globally', id });
 });
 
+adminRoutes.get('/signature-reasons', (req, res) => {
+  const db = getDB();
+  const reasons = db.prepare('SELECT id, reason_code, description, role_required, is_active, created_at FROM signature_reason_templates WHERE tenant_id = ? AND is_active = 1 ORDER BY created_at ASC').all(req.tenantId);
+  res.json({ reasons });
+});
+
 adminRoutes.post('/signature-reasons', (req, res) => {
   const db = getDB();
-  const { reason_text } = req.body;
+  const { reason_code, description, role_required, reason_text } = req.body;
+  const code = reason_code || `REASON_${Date.now()}`;
+  const desc = description || reason_text || code;
+  const role = role_required || 'ANY';
+
+  const existing = db.prepare('SELECT id FROM signature_reason_templates WHERE tenant_id = ? AND reason_code = ?').get(req.tenantId, code);
+  if (existing) {
+    return res.status(409).json({
+      error: `Signature reason template with code '${code}' already exists for this tenant`,
+      code: 'DUPLICATE_REASON_CODE'
+    });
+  }
+
   const id = uuid();
-  db.prepare("INSERT INTO system_codelists (id, tenant_id, name, value_str, created_by) VALUES (?, ?, ?, ?, ?)").run(id, req.tenantId, `sig_reason_${Date.now()}`, reason_text, req.user.id);
-  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Signature Reason Added', objectType: 'admin', detail: reason_text, ip: req.ip });
-  res.status(201).json({ message: 'Signature reason template saved', id });
+  try {
+    db.prepare(`
+      INSERT INTO signature_reason_templates (id, tenant_id, reason_code, description, role_required, is_active, created_at)
+      VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+    `).run(id, req.tenantId, code, desc, role);
+  } catch (err) {
+    if (err.message && (err.message.includes('UNIQUE constraint failed') || err.message.includes('SQLITE_CONSTRAINT_UNIQUE'))) {
+      return res.status(409).json({
+        error: `Signature reason template with code '${code}' already exists for this tenant`,
+        code: 'DUPLICATE_REASON_CODE'
+      });
+    }
+    throw err;
+  }
+
+  try {
+    db.prepare("INSERT INTO system_codelists (id, tenant_id, name, value_str, created_by) VALUES (?, ?, ?, ?, ?)").run(id, req.tenantId, `sig_reason_${Date.now()}`, desc, req.user.id);
+  } catch (e) {}
+
+  appendAudit({ tenantId: req.tenantId, userId: req.user.id, userName: req.user.name, action: 'Signature Reason Added', objectType: 'admin', detail: `${code}: ${desc}`, ip: req.ip });
+  const reason = { id, tenant_id: req.tenantId, reason_code: code, description: desc, role_required: role, is_active: 1 };
+  res.status(201).json({ message: 'Signature reason template saved', id, reason });
 });
 
 // ── GLOBAL SECURITY ──────────────────────────────────────────────────
@@ -1430,6 +1489,48 @@ adminRoutes.post('/delegations', (req, res) => {
   res.status(201).json({ message: 'Delegation created successfully' });
 });
 
+// ── BACKGROUND AUTOMATION DAEMONS (§8.5.2.11 & §8.5.2.12) ───────────
+adminRoutes.post('/daemons/purge-inactive', async (req, res) => {
+  try {
+    const { retentionDays, dryRun, forceAllInactive } = req.body || {};
+    const result = await runInactiveDocumentPurge(req.tenantId, {
+      retentionDays: retentionDays !== undefined ? Number(retentionDays) : undefined,
+      dryRun: Boolean(dryRun),
+      forceAllInactive: Boolean(forceAllInactive),
+      userId: req.user.id,
+      userName: req.user.name,
+    });
+    res.json({
+      message: dryRun ? 'Inactive document purge preview (dry-run)' : 'Inactive document purge completed successfully',
+      ...result,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to run inactive document purge', detail: err.message });
+  }
+});
+
+adminRoutes.post('/daemons/sla-reminders', async (req, res) => {
+  try {
+    const { dryRun, forceAll, force } = req.body || {};
+    const result = await runSlaReminderCheck(req.tenantId, {
+      dryRun: Boolean(dryRun),
+      forceAll: Boolean(forceAll || force),
+      userId: req.user.id,
+      userName: req.user.name,
+    });
+    res.json({
+      message: dryRun ? 'SLA reminder check preview (dry-run)' : 'SLA reminder check executed successfully',
+      ...result,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to run SLA reminder check', detail: err.message });
+  }
+});
+
+adminRoutes.get('/daemons/status', (req, res) => {
+  res.json(getSchedulerStatus());
+});
+
 /**
  * Folders routes
  */
@@ -1672,6 +1773,479 @@ folderRoutes.get('/file-plans/study/:studyId', (req, res) => {
  */
 const qcRoutes = R();
 qcRoutes.use(requireAuth);
+
+// ── AUDIT PLANS (Phase 6 §11) ──────────────────────────────────────
+qcRoutes.get('/plans', (req, res) => {
+  const db = getDB();
+  const { study_id, studyId, status } = req.query;
+  const targetStudy = study_id || studyId;
+  let where = ['tenant_id = ?'];
+  const params = [req.tenantId];
+
+  if (targetStudy) {
+    where.push('study_id = ?');
+    params.push(targetStudy);
+  }
+  if (status && status !== 'All') {
+    where.push('status = ?');
+    params.push(status);
+  }
+
+  const plans = db.prepare(`SELECT * FROM audit_plans WHERE ${where.join(' AND ')} ORDER BY created_at DESC`).all(...params);
+  const countPartStmt = db.prepare('SELECT COUNT(*) as c FROM audit_participants WHERE audit_plan_id = ? AND tenant_id = ?');
+  const countDocStmt = db.prepare('SELECT COUNT(*) as c FROM audit_plan_documents WHERE audit_plan_id = ? AND tenant_id = ?');
+  plans.forEach(p => {
+    p.participant_count = countPartStmt.get(p.id, req.tenantId)?.c || 0;
+    p.document_count = countDocStmt.get(p.id, req.tenantId)?.c || 0;
+  });
+
+  res.json({ plans });
+});
+
+qcRoutes.post('/plans', (req, res) => {
+  const db = getDB();
+  const { title, study_id, studyId, lead_auditor, leadAuditor, start_date, startDate, end_date, endDate, scope_description, scopeDescription, status } = req.body;
+
+  const targetTitle = title ? String(title).trim() : '';
+  const targetStudy = study_id || studyId;
+  const targetLead = lead_auditor || leadAuditor;
+  const targetStart = start_date || startDate;
+  const targetEnd = end_date || endDate;
+  const targetScope = scope_description || scopeDescription || '';
+  const planStatus = status || 'Draft';
+
+  if (!targetTitle) return res.status(400).json({ error: 'title is required', code: 'TITLE_REQUIRED' });
+  if (!targetStudy) return res.status(400).json({ error: 'study_id is required', code: 'STUDY_REQUIRED' });
+  if (!targetLead) return res.status(400).json({ error: 'lead_auditor is required', code: 'LEAD_AUDITOR_REQUIRED' });
+  if (!targetStart) return res.status(400).json({ error: 'start_date is required', code: 'START_DATE_REQUIRED' });
+  if (!targetEnd) return res.status(400).json({ error: 'end_date is required', code: 'END_DATE_REQUIRED' });
+
+  const sDate = new Date(targetStart);
+  const eDate = new Date(targetEnd);
+  if (isNaN(sDate.getTime()) || isNaN(eDate.getTime()) || sDate > eDate) {
+    return res.status(400).json({
+      error: 'Invalid date range: start_date must be before or equal to end_date',
+      code: 'INVALID_DATE_RANGE'
+    });
+  }
+
+  const allowedStatus = ['Draft', 'Active', 'Completed'];
+  if (!allowedStatus.includes(planStatus)) {
+    return res.status(400).json({
+      error: `Invalid status: ${planStatus}. Allowed values: ${allowedStatus.join(', ')}`,
+      code: 'INVALID_STATUS'
+    });
+  }
+
+  const id = uuid();
+  db.prepare(`
+    INSERT INTO audit_plans (id, tenant_id, title, study_id, lead_auditor, start_date, end_date, scope_description, status, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+  `).run(id, req.tenantId, targetTitle, targetStudy, targetLead, targetStart, targetEnd, targetScope, planStatus, req.user?.id || 'system');
+
+  // Auto-assign Lead Auditor as participant
+  const matchedUser = db.prepare('SELECT id, name FROM users WHERE (id = ? OR email = ? OR name = ? OR username = ?) AND tenant_id = ?').get(targetLead, targetLead, targetLead, targetLead, req.tenantId);
+  const leadUserId = matchedUser ? matchedUser.id : null;
+  const leadUserName = matchedUser ? matchedUser.name : targetLead;
+
+  db.prepare(`
+    INSERT INTO audit_participants (id, tenant_id, audit_plan_id, user_id, user_name, role, notification_sent, assigned_at)
+    VALUES (?, ?, ?, ?, ?, 'Lead Auditor', 1, datetime('now'))
+  `).run(uuid(), req.tenantId, id, leadUserId, leadUserName);
+
+  // 21 CFR Part 11 Audit Trail
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: targetStudy,
+    userId: req.user?.id || 'system',
+    userName: req.user?.name || 'System',
+    userRole: req.user?.role || 'Auditor',
+    action: 'Audit Plan Created',
+    objectType: 'audit_plan',
+    objectId: id,
+    objectName: targetTitle,
+    detail: `Audit Plan "${targetTitle}" created for study ${targetStudy}. Lead Auditor: ${leadUserName}. Range: ${targetStart} to ${targetEnd}. Status: ${planStatus}`,
+    ip: req.ip
+  });
+
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ?').get(id);
+  res.status(201).json({ message: 'Audit plan created successfully', plan });
+});
+
+qcRoutes.get('/plans/:id', (req, res) => {
+  const db = getDB();
+  ensureAuditPlanResponseTables(db);
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+
+  const participants = db.prepare('SELECT * FROM audit_participants WHERE audit_plan_id = ? AND tenant_id = ? ORDER BY assigned_at ASC').all(req.params.id, req.tenantId);
+  const documents = db.prepare(`
+    SELECT apd.*, d.title as document_title, d.artifact_code, d.version as document_version, d.status as document_status
+    FROM audit_plan_documents apd
+    LEFT JOIN documents d ON apd.document_id = d.id
+    WHERE apd.audit_plan_id = ? AND apd.tenant_id = ?
+    ORDER BY apd.created_at ASC
+  `).all(req.params.id, req.tenantId);
+
+  const responses = db.prepare(`
+    SELECT apr.*, d.title as document_title, d.artifact_code
+    FROM audit_plan_responses apr
+    LEFT JOIN documents d ON apr.document_id = d.id
+    WHERE apr.audit_plan_id = ? AND apr.tenant_id = ?
+    ORDER BY apr.responded_at DESC
+  `).all(req.params.id, req.tenantId);
+
+  res.json({ plan, participants, documents, responses });
+});
+
+const updateAuditPlanHandler = (req, res) => {
+  const db = getDB();
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+
+  const newStatus = req.body.status !== undefined ? req.body.status : plan.status;
+  const allowedStatus = ['Draft', 'Active', 'Completed'];
+  if (!allowedStatus.includes(newStatus)) {
+    return res.status(400).json({
+      error: `Invalid status: ${newStatus}. Allowed values: ${allowedStatus.join(', ')}`,
+      code: 'INVALID_STATUS'
+    });
+  }
+
+  const newStart = req.body.start_date || req.body.startDate || plan.start_date;
+  const newEnd = req.body.end_date || req.body.endDate || plan.end_date;
+  const sDate = new Date(newStart);
+  const eDate = new Date(newEnd);
+  if (isNaN(sDate.getTime()) || isNaN(eDate.getTime()) || sDate > eDate) {
+    return res.status(400).json({
+      error: 'Invalid date range: start_date must be before or equal to end_date',
+      code: 'INVALID_DATE_RANGE'
+    });
+  }
+
+  const newTitle = req.body.title !== undefined ? req.body.title : plan.title;
+  const newScope = req.body.scope_description !== undefined ? req.body.scope_description : (req.body.scopeDescription !== undefined ? req.body.scopeDescription : plan.scope_description);
+  const newLead = req.body.lead_auditor !== undefined ? req.body.lead_auditor : (req.body.leadAuditor !== undefined ? req.body.leadAuditor : plan.lead_auditor);
+  const newStudy = req.body.study_id !== undefined ? req.body.study_id : (req.body.studyId !== undefined ? req.body.studyId : plan.study_id);
+
+  db.prepare(`
+    UPDATE audit_plans
+    SET title = ?, study_id = ?, lead_auditor = ?, start_date = ?, end_date = ?, scope_description = ?, status = ?, updated_at = datetime('now')
+    WHERE id = ? AND tenant_id = ?
+  `).run(newTitle, newStudy, newLead, newStart, newEnd, newScope, newStatus, req.params.id, req.tenantId);
+
+  const updatedPlan = db.prepare('SELECT * FROM audit_plans WHERE id = ?').get(req.params.id);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: updatedPlan.study_id,
+    userId: req.user?.id || 'system',
+    userName: req.user?.name || 'System',
+    userRole: req.user?.role || 'Auditor',
+    action: 'Audit Plan Updated',
+    objectType: 'audit_plan',
+    objectId: req.params.id,
+    objectName: updatedPlan.title,
+    detail: `Audit Plan "${updatedPlan.title}" updated. Status: ${updatedPlan.status}`,
+    oldValue: JSON.stringify(plan),
+    newValue: JSON.stringify(updatedPlan),
+    ip: req.ip
+  });
+
+  res.json({ message: 'Audit plan updated successfully', plan: updatedPlan });
+};
+
+qcRoutes.put('/plans/:id', updateAuditPlanHandler);
+qcRoutes.patch('/plans/:id', updateAuditPlanHandler);
+
+qcRoutes.get('/plans/:id/participants', (req, res) => {
+  const db = getDB();
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+
+  const participants = db.prepare('SELECT * FROM audit_participants WHERE audit_plan_id = ? AND tenant_id = ? ORDER BY assigned_at ASC').all(req.params.id, req.tenantId);
+  res.json({ participants });
+});
+
+qcRoutes.post('/plans/:id/participants', (req, res) => {
+  const db = getDB();
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+
+  const allowedRoles = ['Lead Auditor', 'Auditor', 'Auditee', 'Observer'];
+  const { role } = req.body;
+  if (!role || !allowedRoles.includes(role)) {
+    return res.status(400).json({
+      error: `Invalid role: ${role}. Allowed roles: ${allowedRoles.join(', ')}`,
+      code: 'INVALID_ROLE'
+    });
+  }
+
+  const uid = req.body.user_id || req.body.userId || null;
+  let uname = req.body.user_name || req.body.userName;
+  if (uid && !uname) {
+    const u = db.prepare('SELECT id, name FROM users WHERE id = ? AND tenant_id = ?').get(uid, req.tenantId);
+    if (u) uname = u.name;
+  }
+  if (!uname) {
+    return res.status(400).json({
+      error: 'user_name or valid user_id required',
+      code: 'USER_REQUIRED'
+    });
+  }
+
+  const existing = db.prepare(`
+    SELECT * FROM audit_participants
+    WHERE audit_plan_id = ? AND (user_id = ? OR user_name = ?) AND role = ? AND tenant_id = ?
+  `).get(req.params.id, uid || '', uname, role, req.tenantId);
+  if (existing) {
+    return res.status(409).json({
+      error: `Participant ${uname} is already assigned as ${role} for this plan`,
+      code: 'DUPLICATE_PARTICIPANT',
+      participant: existing
+    });
+  }
+
+  const partId = uuid();
+  const notifSent = (req.body.notification_sent || req.body.notificationSent) ? 1 : 0;
+  db.prepare(`
+    INSERT INTO audit_participants (id, tenant_id, audit_plan_id, user_id, user_name, role, notification_sent, assigned_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(partId, req.tenantId, req.params.id, uid, uname, role, notifSent);
+
+  const participant = db.prepare('SELECT * FROM audit_participants WHERE id = ?').get(partId);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: plan.study_id,
+    userId: req.user?.id || 'system',
+    userName: req.user?.name || 'System',
+    userRole: req.user?.role || 'Auditor',
+    action: 'Audit Participant Assigned',
+    objectType: 'audit_participant',
+    objectId: partId,
+    objectName: uname,
+    detail: `Assigned ${uname} as ${role} to Audit Plan "${plan.title}"`,
+    ip: req.ip
+  });
+
+  res.status(201).json({ message: 'Participant assigned successfully', participant });
+});
+
+// Ensure tables and columns for audit plan responses and quality check
+function ensureAuditPlanResponseTables(db) {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_plan_responses (
+        id                TEXT PRIMARY KEY,
+        tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+        audit_plan_id     TEXT NOT NULL REFERENCES audit_plans(id) ON DELETE CASCADE,
+        document_id       TEXT,
+        finding_id        TEXT,
+        auditee_response  TEXT NOT NULL,
+        capa_reference    TEXT,
+        responded_by      TEXT,
+        responded_by_name TEXT,
+        responded_at      TEXT DEFAULT (datetime('now')),
+        status            TEXT DEFAULT 'Submitted'
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_plan_resp_plan ON audit_plan_responses(audit_plan_id, tenant_id);
+    `);
+    const addCol = (col, def) => {
+      try { db.exec(`ALTER TABLE audit_plan_documents ADD COLUMN ${col} ${def}`); } catch (e) {}
+    };
+    addCol('auditee_response', 'TEXT');
+    addCol('capa_reference', 'TEXT');
+    addCol('responded_at', 'TEXT');
+    addCol('responded_by', 'TEXT');
+  } catch (e) {}
+}
+
+// ── DOCUMENT QUALITY CHECK (Phase 6 §11.4.4 & §8.10.17) ─────────────
+qcRoutes.post('/check', (req, res) => {
+  const db = getDB();
+  ensureAuditPlanResponseTables(db);
+
+  const planId = req.body?.plan_id || req.body?.planId;
+  const documentId = req.body?.document_id || req.body?.documentId;
+  const findings = req.body?.findings !== undefined ? String(req.body.findings) : '';
+  const status = req.body?.status || 'Conformant';
+
+  if (!planId) {
+    return res.status(400).json({ error: 'plan_id is required', code: 'PLAN_REQUIRED' });
+  }
+  if (!documentId) {
+    return res.status(400).json({ error: 'document_id is required', code: 'DOCUMENT_REQUIRED' });
+  }
+
+  const allowedStatuses = ['Conformant', 'Deficient'];
+  if (!allowedStatuses.includes(status)) {
+    return res.status(400).json({
+      error: `status must be one of: ${allowedStatuses.join(', ')}`,
+      code: 'INVALID_STATUS'
+    });
+  }
+
+  if (status === 'Deficient' && !findings.trim()) {
+    return res.status(400).json({
+      error: 'findings description is required when document status is Deficient',
+      code: 'FINDINGS_REQUIRED'
+    });
+  }
+
+  // Validate plan exists for req.tenantId
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(planId, req.tenantId);
+  if (!plan) {
+    return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+  }
+
+  // Validate document exists for req.tenantId
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(documentId, req.tenantId);
+  if (!doc) {
+    return res.status(404).json({ error: 'Document not found', code: 'DOCUMENT_NOT_FOUND' });
+  }
+
+  // Duplicate Audit Prevention (§11.4.4)
+  const existing = db.prepare('SELECT id FROM audit_plan_documents WHERE audit_plan_id = ? AND document_id = ? AND tenant_id = ?').get(planId, documentId, req.tenantId);
+  if (existing) {
+    return res.status(409).json({
+      error: 'Document already audited under this plan',
+      code: 'DUPLICATE_AUDIT'
+    });
+  }
+
+  const recordId = uuid();
+  const auditedAt = new Date().toISOString();
+  const auditedBy = req.user?.name || req.user?.id || 'Lead Auditor';
+
+  db.prepare(`
+    INSERT INTO audit_plan_documents (id, tenant_id, audit_plan_id, document_id, status, findings, audited_by, audited_at, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(recordId, req.tenantId, planId, documentId, status, findings, auditedBy, auditedAt);
+
+  // 21 CFR Part 11 Audit Trail
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: plan.study_id,
+    documentId: documentId,
+    userId: req.user?.id || 'system',
+    userName: req.user?.name || 'System',
+    userRole: req.user?.role || 'Auditor',
+    action: 'Document Quality Check',
+    objectType: 'audit_plan_document',
+    objectId: recordId,
+    objectName: doc.title,
+    detail: `Document "${doc.title}" quality checked for Audit Plan "${plan.title}". Status: ${status}. Findings: ${findings || 'None'}`,
+    ip: req.ip
+  });
+
+  const auditRecord = db.prepare('SELECT * FROM audit_plan_documents WHERE id = ?').get(recordId);
+  res.status(201).json({
+    message: 'Document quality check recorded',
+    audit_record: auditRecord
+  });
+});
+
+// ── AUDIT PLAN RESPONSES (Phase 6 §11b) ─────────────────────────────
+qcRoutes.post('/plans/:id/responses', (req, res) => {
+  const db = getDB();
+  ensureAuditPlanResponseTables(db);
+
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) {
+    return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+  }
+
+  const responseText = req.body?.auditee_response || req.body?.auditeeResponse || req.body?.response;
+  if (!responseText || !String(responseText).trim()) {
+    return res.status(400).json({ error: 'auditee_response is required', code: 'RESPONSE_REQUIRED' });
+  }
+
+  const targetDocId = req.body?.document_id || req.body?.documentId;
+  const targetFindingId = req.body?.finding_id || req.body?.findingId;
+  const capaRef = req.body?.capa_reference || req.body?.capaReference || null;
+
+  let finding = null;
+  if (targetFindingId) {
+    finding = db.prepare('SELECT * FROM audit_plan_documents WHERE id = ? AND audit_plan_id = ? AND tenant_id = ?').get(targetFindingId, req.params.id, req.tenantId);
+  } else if (targetDocId) {
+    finding = db.prepare('SELECT * FROM audit_plan_documents WHERE audit_plan_id = ? AND document_id = ? AND tenant_id = ? ORDER BY created_at DESC').get(req.params.id, targetDocId, req.tenantId);
+  }
+
+  if (targetFindingId && !finding) {
+    return res.status(404).json({ error: 'Finding record not found for this plan', code: 'FINDING_NOT_FOUND' });
+  }
+
+  const docIdToStore = finding ? finding.document_id : targetDocId;
+  const findingIdToStore = finding ? finding.id : targetFindingId;
+  const responderName = req.user?.name || req.user?.id || 'Auditee';
+  const respondedAt = new Date().toISOString();
+
+  // If finding record exists in audit_plan_documents, update its status and response info
+  if (finding) {
+    const updatedStatus = req.body?.status || (finding.status === 'Deficient' ? 'Responded' : finding.status);
+    db.prepare(`
+      UPDATE audit_plan_documents
+      SET status = ?,
+          auditee_response = ?,
+          capa_reference = ?,
+          responded_at = datetime('now'),
+          responded_by = ?
+      WHERE id = ? AND tenant_id = ?
+    `).run(updatedStatus, String(responseText).trim(), capaRef, responderName, finding.id, req.tenantId);
+  }
+
+  const responseId = uuid();
+  db.prepare(`
+    INSERT INTO audit_plan_responses (id, tenant_id, audit_plan_id, document_id, finding_id, auditee_response, capa_reference, responded_by, responded_by_name, responded_at, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted')
+  `).run(responseId, req.tenantId, req.params.id, docIdToStore || null, findingIdToStore || null, String(responseText).trim(), capaRef, req.user?.id || null, responderName, respondedAt);
+
+  // 21 CFR Part 11 Audit Trail
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: plan.study_id,
+    documentId: docIdToStore || undefined,
+    userId: req.user?.id || 'system',
+    userName: req.user?.name || 'System',
+    userRole: req.user?.role || 'Auditee',
+    action: 'Audit Response Submitted',
+    objectType: 'audit_response',
+    objectId: responseId,
+    objectName: `Response for Plan ${plan.title}`,
+    detail: `Auditee response submitted for plan "${plan.title}"${docIdToStore ? ` (Document: ${docIdToStore})` : ''}. CAPA Reference: ${capaRef || 'None'}. Response: ${String(responseText).trim()}`,
+    ip: req.ip
+  });
+
+  const createdResponse = db.prepare('SELECT * FROM audit_plan_responses WHERE id = ?').get(responseId);
+  const updatedDoc = finding ? db.prepare('SELECT * FROM audit_plan_documents WHERE id = ?').get(finding.id) : null;
+
+  res.status(201).json({
+    message: 'Auditee response recorded successfully',
+    response: createdResponse,
+    audit_record: updatedDoc
+  });
+});
+
+qcRoutes.get('/plans/:id/responses', (req, res) => {
+  const db = getDB();
+  ensureAuditPlanResponseTables(db);
+
+  const plan = db.prepare('SELECT * FROM audit_plans WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!plan) {
+    return res.status(404).json({ error: 'Audit plan not found', code: 'PLAN_NOT_FOUND' });
+  }
+
+  const responses = db.prepare(`
+    SELECT apr.*, d.title as document_title, d.artifact_code
+    FROM audit_plan_responses apr
+    LEFT JOIN documents d ON apr.document_id = d.id
+    WHERE apr.audit_plan_id = ? AND apr.tenant_id = ?
+    ORDER BY apr.responded_at DESC
+  `).all(req.params.id, req.tenantId);
+
+  res.json({ responses });
+});
 
 qcRoutes.get('/', (req, res) => {
   const db = getDB();

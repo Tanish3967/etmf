@@ -499,6 +499,56 @@ export async function initDB() {
       created_at       TEXT DEFAULT (datetime('now'))
     );
 
+    -- ── QUALITY CONTROL & AUDIT PLANS (Phase 6 §11) ──────────────────
+    CREATE TABLE IF NOT EXISTS audit_plans (
+      id                TEXT PRIMARY KEY,
+      tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+      title             TEXT NOT NULL,
+      study_id          TEXT REFERENCES studies(id),
+      lead_auditor      TEXT NOT NULL,
+      start_date        TEXT NOT NULL,
+      end_date          TEXT NOT NULL,
+      scope_description TEXT,
+      status            TEXT DEFAULT 'Draft', -- 'Draft', 'Active', 'Completed'
+      created_by        TEXT,
+      created_at        TEXT DEFAULT (datetime('now')),
+      updated_at        TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_participants (
+      id                TEXT PRIMARY KEY,
+      tenant_id         TEXT NOT NULL REFERENCES tenants(id),
+      audit_plan_id     TEXT NOT NULL REFERENCES audit_plans(id) ON DELETE CASCADE,
+      user_id           TEXT,
+      user_name         TEXT NOT NULL,
+      role              TEXT NOT NULL, -- 'Lead Auditor', 'Auditor', 'Auditee', 'Observer'
+      notification_sent INTEGER DEFAULT 0,
+      assigned_at       TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_plan_documents (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+      audit_plan_id  TEXT NOT NULL REFERENCES audit_plans(id) ON DELETE CASCADE,
+      document_id    TEXT NOT NULL REFERENCES documents(id),
+      status         TEXT DEFAULT 'Pending', -- 'Pending', 'Audited', 'Conformant', 'Deficient'
+      findings       TEXT,
+      audited_by     TEXT,
+      audited_at     TEXT,
+      created_at     TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS signature_reason_templates (
+      id             TEXT PRIMARY KEY,
+      tenant_id      TEXT NOT NULL REFERENCES tenants(id),
+      reason_code    TEXT NOT NULL,
+      description    TEXT NOT NULL,
+      role_required  TEXT,
+      is_active      INTEGER DEFAULT 1,
+      created_at     TEXT DEFAULT (datetime('now')),
+      UNIQUE(tenant_id, reason_code)
+    );
+
     -- ── INDEXES ──────────────────────────────────────────────────────
     CREATE INDEX IF NOT EXISTS idx_docs_study      ON documents(study_id, tenant_id);
     CREATE INDEX IF NOT EXISTS idx_docs_status     ON documents(status, tenant_id);
@@ -511,6 +561,11 @@ export async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_notifs_user     ON notifications(user_id, read);
     CREATE INDEX IF NOT EXISTS idx_wf_doc          ON workflow_history(document_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_study_code ON sites(study_id, site_code, tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_plans_tenant      ON audit_plans(tenant_id, study_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_participants_plan ON audit_participants(audit_plan_id, tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_plan_docs_plan    ON audit_plan_documents(audit_plan_id, tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_plan_docs_doc     ON audit_plan_documents(document_id);
+    CREATE INDEX IF NOT EXISTS idx_sig_reasons_tenant      ON signature_reason_templates(tenant_id, reason_code);
     -- ── MIGRATIONS (Safe column additions) ───────────────────────────
   `);
 
@@ -643,9 +698,25 @@ export async function initDB() {
   addColumn('placeholders', 'na_by', 'TEXT');
   addColumn('placeholders', 'na_at', 'TEXT');
 
+  // Phase 6 M3: Background Automation Daemons (Inactive Document Purge & SLA Reminders)
+  addColumn('documents', 'deleted_at', 'TEXT');
+  addColumn('documents', 'updated_at', 'TEXT');
+  addColumn('documents', 'retention_days', 'INTEGER DEFAULT 30');
+  addColumn('documents', 'sla_reminder_1_sent_at', 'TEXT');
+  addColumn('documents', 'sla_reminder_2_sent_at', 'TEXT');
+  addColumn('notifications', 'metadata', "TEXT DEFAULT '{}'");
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_docs_active_status ON documents(tenant_id, active, status);
+      CREATE INDEX IF NOT EXISTS idx_docs_deleted_at ON documents(deleted_at);
+      CREATE INDEX IF NOT EXISTS idx_docs_sla_reminders ON documents(sla_reminder_1_sent_at, sla_reminder_2_sent_at);
+    `);
+  } catch (e) {}
+
   await seedClinicalForms();
   await seedDemoData();
   await seedSecurityAndAdminData(db);
+  await seedPhase6Data(db);
   console.log('✅ Database initialised');
   return db;
 }
@@ -964,4 +1035,48 @@ async function seedSecurityAndAdminData(db) {
     desigs.forEach(d => insCode.run(uuid(), tenantId, d.code, d.name, 'Designation', 'system'));
   }
 }
+
+async function seedPhase6Data(db) {
+  try {
+    const tenantId = 'tenant-001';
+    const sigReasonCount = db.prepare('SELECT COUNT(*) as c FROM signature_reason_templates WHERE tenant_id = ?').get(tenantId).c;
+    if (sigReasonCount === 0) {
+      const defaultReasons = [
+        { reason_code: 'AUTHOR_APPROVAL', description: 'I confirm that I am the author of this document and approve its content.', role_required: 'AUTHOR' },
+        { reason_code: 'QUALITY_REVIEW', description: 'I confirm that a formal quality review has been performed according to standard operating procedures.', role_required: 'QUALITY_CHECK' },
+        { reason_code: 'REGULATORY_SIGNOFF', description: 'I verify that this document meets all regulatory requirements and is ready for submission.', role_required: 'APPROVER' },
+        { reason_code: 'SPONSOR_VERIFICATION', description: 'I confirm that sponsor oversight and verification have been completed satisfactorily.', role_required: 'CLINICAL_HEAD' }
+      ];
+      const ins = db.prepare(`
+        INSERT OR IGNORE INTO signature_reason_templates (id, tenant_id, reason_code, description, role_required, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+      `);
+      defaultReasons.forEach(r => {
+        ins.run(uuid(), tenantId, r.reason_code, r.description, r.role_required);
+      });
+      console.log('✅ Default signature reason templates seeded');
+    }
+
+    // Milestone M3: Seed default organization profile for REMOVE_ALL_INACTIVE_DOCUMENTS if not present
+    const existingProfile = db.prepare('SELECT id FROM organization_profiles WHERE name = ? AND tenant_id = ?').get('REMOVE_ALL_INACTIVE_DOCUMENTS', tenantId);
+    if (!existingProfile) {
+      db.prepare(`
+        INSERT INTO organization_profiles (id, tenant_id, profile_type, name, description, value_str, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        uuid(),
+        tenantId,
+        'Configurable',
+        'REMOVE_ALL_INACTIVE_DOCUMENTS',
+        'Automated background retention purge threshold in days for inactive documents (§8.5.2.11)',
+        '30',
+        'system'
+      );
+      console.log('✅ Default REMOVE_ALL_INACTIVE_DOCUMENTS profile seeded');
+    }
+  } catch (e) {
+    console.error('Error seeding Phase 6 data:', e.message);
+  }
+}
+
 

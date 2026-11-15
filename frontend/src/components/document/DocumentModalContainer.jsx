@@ -15,6 +15,9 @@ import WorkflowAdvanceModal from '../workflow/WorkflowAdvanceModal';
 import ESignatureModal from '../workflow/ESignatureModal';
 import AuditHistoryModal from '../workflow/AuditHistoryModal';
 
+// Milestone M4: Quality Control & Audit Plan Integration (Clinevo eTMF 4.3 §11.4.4 & §8.10.17)
+import QualityCheckModal from '../inspection/QualityCheckModal';
+
 export default function DocumentModalContainer({
   activeModal,
   user,
@@ -22,7 +25,8 @@ export default function DocumentModalContainer({
   onRefresh,
   onSelectVersion,
   onRequireESig,
-  onDocumentUpdated
+  onDocumentUpdated,
+  onOpenNextDoc
 }) {
   if (!activeModal) return null;
 
@@ -97,6 +101,7 @@ export default function DocumentModalContainer({
             if (onDocumentUpdated) onDocumentUpdated(updatedDoc);
           }}
           onRequireESig={onRequireESig}
+          onOpenNextDoc={onOpenNextDoc}
         />
       )}
       {type === 'esignature' && (
@@ -108,12 +113,24 @@ export default function DocumentModalContainer({
             onRefresh();
             if (onDocumentUpdated) onDocumentUpdated(updatedDoc);
           }}
+          onOpenNextDoc={onOpenNextDoc}
         />
       )}
       {type === 'audit_history' && (
         <AuditHistoryModal
           doc={doc}
           onClose={onClose}
+        />
+      )}
+      {type === 'quality_check' && (
+        <QualityCheckModal
+          doc={doc}
+          user={user}
+          onClose={onClose}
+          onChecked={() => {
+            onClose();
+            onRefresh();
+          }}
         />
       )}
     </>

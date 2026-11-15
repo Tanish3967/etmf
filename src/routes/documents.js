@@ -41,13 +41,13 @@ const upload = multer({
       '.pdf', '.docx', '.doc', '.xlsx', '.xls', '.pptx', '.ppt',
       '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.svg', '.gif',
       '.xml', '.html', '.htm', '.txt', '.csv', '.tsv', '.rtf',
-      '.json', '.zip', '.eml', '.msg'
+      '.json', '.zip', '.eml', '.msg', '.sas7bdat', '.xpt'
     ];
     const ext = extname(file.originalname).toLowerCase();
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
-      const err = new Error(`File type not permitted: ${ext || 'unknown'}. Allowed clinical formats: PDF, Word, Excel, PowerPoint, XML, HTML, Images, CSV, Text, JSON, and ZIP.`);
+      const err = new Error(`File type not permitted: ${ext || 'unknown'}. Allowed clinical formats: PDF, Word, Excel, PowerPoint, XML, HTML, Images, CSV, Text, JSON, ZIP, SAS (.sas7bdat), and XPORT (.xpt).`);
       err.status = 400;
       cb(err);
     }
@@ -543,11 +543,22 @@ router.patch('/:id/move', blockInspector, requireCap('canUpload'), (req, res) =>
 const handleInactivateDoc = (req, res) => {
   const db = getDB();
   const reason = req.body?.reason || req.query?.reason || 'Soft deleted / Inactivated';
-  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  const id = req.params.id;
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-  db.prepare('UPDATE documents SET active = 0 WHERE id = ?').run(req.params.id);
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Inactivated', objectType: 'document', objectId: req.params.id, detail: reason, ip: req.ip });
+  // Audited Document Deletion Lock (§11.4.3 & §8.10.17)
+  const auditedDoc = db.prepare('SELECT id, audit_plan_id FROM audit_plan_documents WHERE document_id = ? AND tenant_id = ?').get(id, req.tenantId);
+  if (auditedDoc) {
+    return res.status(409).json({
+      error: 'Document has been formally audited in Quality Control Plan and cannot be deleted or inactivated (GCP/Part 11 Retention Requirement)',
+      code: 'AUDITED_DOC_LOCKED',
+      audit_plan_id: auditedDoc.audit_plan_id
+    });
+  }
+
+  db.prepare("UPDATE documents SET active = 0, deleted_at = datetime('now'), updated_at = datetime('now') WHERE id = ?").run(id);
+  appendAudit({ tenantId: req.tenantId, documentId: id, userId: req.user.id, userName: req.user.name, action: 'Inactivated', objectType: 'document', objectId: id, detail: reason, ip: req.ip });
   res.json({ message: 'Document inactivated (soft deleted)' });
 };
 
@@ -741,6 +752,8 @@ router.get('/:id/view', (req, res) => {
       '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.sas7bdat': 'application/x-sas-data',
+      '.xpt': 'application/x-xport',
     };
     const contentType = mimeTypes[ext] || 'application/octet-stream';
     res.setHeader('Content-Type', contentType);
