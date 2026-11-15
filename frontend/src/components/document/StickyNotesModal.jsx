@@ -17,8 +17,20 @@ export default function StickyNotesModal({ doc, onClose }) {
     if (!doc?.id) return;
     try {
       setLoading(true);
-      const res = await api.get(`/documents/${doc.id}`);
-      setNotes(res.data.annotations || []);
+      const [docRes, notesRes] = await Promise.all([
+        api.get(`/documents/${doc.id}`),
+        api.get(`/documents/${doc.id}/notes`).catch(() => ({ data: { notes: [] } }))
+      ]);
+      const dbNotes = (notesRes.data?.notes || []).map(n => ({
+        id: n.id,
+        user_name: n.user_name || n.created_by_name || 'Clinical User',
+        created_at: n.created_at,
+        annotation_text: n.text,
+        annotation_type: `StickyNote[${n.visibility || 'Public'}${n.note_to_file ? ',NoteToFile' : ''}]`,
+        isNoteTable: true
+      }));
+      const annNotes = docRes.data.annotations || [];
+      setNotes([...dbNotes, ...annNotes]);
     } catch (err) {
       console.error('Failed to load notes', err);
     } finally {
@@ -44,10 +56,11 @@ export default function StickyNotesModal({ doc, onClose }) {
         showAllVersions && 'AllVersions',
       ].filter(Boolean).join(',');
 
-      await api.post(`/documents/${doc.id}/annotations`, {
-        annotation_type: `StickyNote[${scopeFlags}]`,
-        annotation_text: text.trim(),
-        page_number: 1,
+      await api.post(`/documents/${doc.id}/notes`, {
+        text: text.trim(),
+        visibility: scopeFlags || 'Public',
+        noteToFile,
+        showAllVersions,
       });
       setText('');
       await fetchNotes();
@@ -58,10 +71,14 @@ export default function StickyNotesModal({ doc, onClose }) {
     }
   };
 
-  const handleDelete = async (noteId) => {
+  const handleDelete = async (noteId, isNoteTable) => {
     if (!confirm('Are you sure you want to delete this sticky note?')) return;
     try {
-      await api.delete(`/documents/${doc.id}/annotations/${noteId}`);
+      if (isNoteTable) {
+        await api.delete(`/documents/${doc.id}/notes/${noteId}`);
+      } else {
+        await api.delete(`/documents/${doc.id}/annotations/${noteId}`);
+      }
       await fetchNotes();
     } catch (err) {
       alert('Failed to delete note: ' + (err.response?.data?.error || err.message));
@@ -102,7 +119,7 @@ export default function StickyNotesModal({ doc, onClose }) {
                     <div style={{ fontSize: 13, color: '#713f12', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{n.annotation_text}</div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, borderTop: '1px dashed #fde047', paddingTop: 6 }}>
                       <span style={{ fontSize: 10, color: '#854d0e', fontStyle: 'italic' }}>{n.annotation_type}</span>
-                      <button onClick={() => handleDelete(n.id)} style={{ background: 'none', border: 'none', color: '#dc2626', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>Remove</button>
+                      <button onClick={() => handleDelete(n.id, n.isNoteTable)} style={{ background: 'none', border: 'none', color: '#dc2626', fontSize: 11, cursor: 'pointer', fontWeight: 600 }}>Remove</button>
                     </div>
                   </div>
                 ))}

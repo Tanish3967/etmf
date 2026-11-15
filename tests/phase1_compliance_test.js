@@ -69,6 +69,9 @@ async function run() {
   // Reset test accounts and purge password history for clean idempotency
   const bcryptModule = await import('bcryptjs');
   const defaultHash = await bcryptModule.default.hash('Admin1234!', 12);
+  db.prepare("DELETE FROM password_history WHERE user_id LIKE 'usr-p1-%'").run();
+  db.prepare("DELETE FROM sessions WHERE user_id LIKE 'usr-p1-%'").run();
+  db.prepare("DELETE FROM users WHERE id LIKE 'usr-p1-%'").run();
   db.prepare("UPDATE users SET password_hash = ?, failed_attempts = 0, failed_login_attempts = 0, locked_until = NULL WHERE email IN ('e.vasquez@pharma.com', 'p.sharma@pharma.com', 'a.patel@pharma.com', 'j.obrien@pharma.com')").run(defaultHash);
   db.prepare("DELETE FROM password_history").run();
   db.prepare("UPDATE documents SET status = 'Draft', checked_out_by = NULL WHERE id = 'doc-005'").run();
@@ -260,6 +263,7 @@ async function run() {
     assert(r.body.subarray(0, 4).toString() === '%PDF', 'Buffer must begin with %PDF');
 
     // Clean up special document
+    db.prepare('DELETE FROM document_access_log WHERE document_id = ?').run(specialDocId);
     db.prepare('DELETE FROM electronic_signatures WHERE id = ?').run(specialEsigId);
     db.prepare('DELETE FROM documents WHERE id = ?').run(specialDocId);
   });
@@ -468,6 +472,7 @@ async function run() {
 
   // Cleanup test fixtures and purge history
   try {
+    db.prepare('DELETE FROM document_access_log WHERE document_id = ?').run(testDocId);
     db.prepare('DELETE FROM workflow_history WHERE document_id = ?').run(testDocId);
     db.prepare('DELETE FROM electronic_signatures WHERE document_id = ?').run(testDocId);
     db.prepare('DELETE FROM documents WHERE id = ?').run(testDocId);
