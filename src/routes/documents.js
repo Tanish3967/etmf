@@ -284,8 +284,26 @@ router.post('/:id/checkout', blockInspector, requireCap('canUpload'), (req, res)
   res.json({ message: 'Document checked out', checkedOutBy: req.user.name, checkedOutAt: new Date().toISOString() });
 });
 
+// ── POST /api/documents/:id/uncheck ──────────────────────────
+router.post('/:id/uncheck', blockInspector, (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+  if (!doc.checked_out_by) return res.status(400).json({ error: 'Document is not checked out' });
+
+  const isOwner = doc.checked_out_by === req.user.id;
+  const isAdmin = req.user.caps?.canAdmin;
+  if (!isOwner && !isAdmin) {
+    return res.status(403).json({ error: 'Only the checkout owner or CHECKIN_ADMIN can uncheck this document' });
+  }
+
+  db.prepare('UPDATE documents SET checked_out_by = NULL, checked_out_at = NULL WHERE id = ?').run(req.params.id);
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Unchecked', objectType: 'document', objectId: req.params.id, objectName: doc.title, detail: 'Checkout lock released without version change', ip: req.ip });
+  res.json({ message: 'Document checkout lock released (unchecked)', document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id) });
+});
+
 // ── POST /api/documents/:id/checkin ──────────────────────────
-router.post('/:id/checkin', blockInspector, (req, res) => {
+router.post('/:id/checkin', blockInspector, upload.single('file'), async (req, res) => {
   const db = getDB();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
@@ -297,9 +315,47 @@ router.post('/:id/checkin', blockInspector, (req, res) => {
     return res.status(403).json({ error: 'Only the checkout owner or admin can check in this document' });
   }
 
-  db.prepare('UPDATE documents SET checked_out_by = NULL, checked_out_at = NULL WHERE id = ?').run(req.params.id);
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Check In', objectType: 'document', objectId: req.params.id, objectName: doc.title, detail: isAdmin && !isOwner ? 'Admin override check-in' : undefined, ip: req.ip });
-  res.json({ message: 'Document checked in' });
+  const body = typeof req.body?.data === 'string' ? JSON.parse(req.body.data) : (req.body || {});
+  const { changeReason, incrementVersion = Boolean(req.file || body.newVersion), targetStatus } = body;
+
+  let nextVersion = doc.version || '1.0';
+  if (incrementVersion) {
+    // Store current version snapshot in document_versions
+    db.prepare('INSERT INTO document_versions (id, document_id, tenant_id, version, status, file_path, file_name, created_by, change_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), doc.id, req.tenantId, doc.version || '1.0', doc.status, doc.file_path, doc.file_name, req.user.id, changeReason || 'Checked in new version');
+
+    if (body.newVersion) {
+      nextVersion = String(body.newVersion);
+    } else {
+      const parts = String(doc.version || '1.0').split('.');
+      const major = parseInt(parts[0] || '1', 10) + 1;
+      nextVersion = `${major}.0`;
+    }
+  }
+
+  let newFileSha256 = doc.file_sha256;
+  const file = req.file;
+  if (file?.path && existsSync(file.path)) {
+    const buf = fs.readFileSync(file.path);
+    newFileSha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  }
+
+  const nextStatus = targetStatus || doc.status;
+  db.prepare(`
+    UPDATE documents
+    SET checked_out_by = NULL,
+        checked_out_at = NULL,
+        version = ?,
+        status = ?,
+        file_path = COALESCE(?, file_path),
+        file_name = COALESCE(?, file_name),
+        file_size = COALESCE(?, file_size),
+        file_sha256 = COALESCE(?, file_sha256)
+    WHERE id = ?
+  `).run(nextVersion, nextStatus, file?.path || null, file?.originalname || null, file?.size || null, newFileSha256, req.params.id);
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Check In', objectType: 'document', objectId: req.params.id, objectName: doc.title, detail: `Version: ${doc.version} -> ${nextVersion}${changeReason ? ` | Reason: ${changeReason}` : ''}`, ip: req.ip });
+  res.json({ message: 'Document checked in', version: nextVersion, document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id) });
 });
 
 // ── POST /api/documents/:id/publish ──────────────────────────
@@ -327,11 +383,19 @@ router.get('/:id/versions', (req, res) => {
   res.json({ versions });
 });
 
-// ── GET /api/documents/:id/download ──────────────────────────
-router.get('/:id/download', async (req, res) => {
+// ── GET & POST /api/documents/:id/download ───────────────────
+const handleDocumentDownload = async (req, res) => {
   const db = getDB();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const downloadType = req.body?.type || (req.query.original === 'true' ? 'original' : 'rendition');
+  const dlReason = req.body?.reason || req.query.reason || '';
+
+  try {
+    db.prepare('INSERT INTO document_access_log (id, document_id, tenant_id, user_id, user_name, user_role, action, version, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), req.params.id, req.tenantId, req.user.id, req.user.name, req.user.role, downloadType === 'original' ? 'Downloaded Original' : 'Downloaded Rendition', doc.version || '1.0', req.ip);
+  } catch (e) {}
 
   appendAudit({
     tenantId: req.tenantId,
@@ -342,8 +406,17 @@ router.get('/:id/download', async (req, res) => {
     objectType: 'document',
     objectId: req.params.id,
     objectName: doc.title,
+    detail: dlReason ? `Type: ${downloadType} | Reason: ${dlReason}` : `Type: ${downloadType}`,
     ip: req.ip
   });
+
+  if (req.method === 'POST' && req.body?.type) {
+    return res.json({
+      message: `Document (${downloadType}) prepared for download`,
+      watermark: `CONTROLLED COPY — ${req.user.name} — ${new Date().toISOString()}`,
+      downloadUrl: `/api/documents/${doc.id}/download?rendition=${downloadType !== 'original'}`
+    });
+  }
 
   const signatures = db.prepare(`
     SELECT es.*, u.name as user_name, u.role as user_role
@@ -411,7 +484,10 @@ router.get('/:id/download', async (req, res) => {
   }
 
   res.status(204).json({ message: 'No file stored (demo mode)' });
-});
+};
+
+router.get('/:id/download', handleDocumentDownload);
+router.post('/:id/download', handleDocumentDownload);
 
 // ── POST /api/documents/:id/copy ─────────────────────────────
 router.post('/:id/copy', blockInspector, requireCap('canUpload'), (req, res) => {
@@ -419,11 +495,20 @@ router.post('/:id/copy', blockInspector, requireCap('canUpload'), (req, res) => 
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
+  const targetZone = req.body?.zone || doc.zone;
+  const targetSection = req.body?.section || doc.section;
+  const targetArtifact = req.body?.artifactCode || doc.artifact_code;
+
   const newId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
   db.prepare(`
     INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, version, status, file_path, file_name, file_type, file_size, confidential, mandatory, country, site_id, active, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '1.0', 'Draft', ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-  `).run(newId, req.tenantId, doc.study_id, doc.artifact_code, doc.artifact_name, doc.zone, doc.zone_label, doc.section, doc.section_label, `Copy of ${doc.title}`, doc.file_path, doc.file_name, doc.file_type, doc.file_size, doc.confidential, doc.mandatory, doc.country, doc.site_id, req.user.id);
+  `).run(newId, req.tenantId, doc.study_id, targetArtifact, doc.artifact_name, targetZone, doc.zone_label, targetSection, doc.section_label, `Copy of ${doc.title}`, doc.file_path, doc.file_name, doc.file_type, doc.file_size, doc.confidential, doc.mandatory, doc.country, doc.site_id, req.user.id);
+
+  try {
+    db.prepare('INSERT INTO document_copy_log (id, source_doc_id, target_doc_id, tenant_id, from_path, to_path, copied_by, copied_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), doc.id, newId, req.tenantId, `${doc.zone}/${doc.section}/${doc.artifact_code}`, `${targetZone}/${targetSection}/${targetArtifact}`, req.user.id, req.user.name);
+  } catch (e) {}
 
   db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(uuid(), newId, req.tenantId, null, 'Draft', req.user.id, `Copied from ${doc.id}`);
@@ -435,28 +520,39 @@ router.post('/:id/copy', blockInspector, requireCap('canUpload'), (req, res) => 
 // ── PATCH /api/documents/:id/move ────────────────────────────
 router.patch('/:id/move', blockInspector, requireCap('canUpload'), (req, res) => {
   const db = getDB();
-  const { studyId, artifactCode, artifactName, zone, zoneLabel, section, sectionLabel } = req.body;
+  const { studyId, artifactCode, artifactName, zone, zoneLabel, section, sectionLabel, reason } = req.body;
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-  db.prepare(`UPDATE documents SET study_id=?, artifact_code=?, artifact_name=?, zone=?, zone_label=?, section=?, section_label=? WHERE id=?`)
-    .run(studyId || doc.study_id, artifactCode, artifactName, zone, zoneLabel, section, sectionLabel, req.params.id);
+  const fromPath = `${doc.zone}/${doc.section}/${doc.artifact_code}`;
+  const toPath = `${zone || doc.zone}/${section || doc.section}/${artifactCode || doc.artifact_code}`;
 
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Moved', objectType: 'document', objectId: req.params.id, detail: `Moved to ${zone} - ${section} (${artifactCode})`, ip: req.ip });
+  db.prepare(`UPDATE documents SET study_id=?, artifact_code=?, artifact_name=?, zone=?, zone_label=?, section=?, section_label=? WHERE id=?`)
+    .run(studyId || doc.study_id, artifactCode || doc.artifact_code, artifactName || doc.artifact_name, zone || doc.zone, zoneLabel || doc.zone_label, section || doc.section, sectionLabel || doc.section_label, req.params.id);
+
+  try {
+    db.prepare('INSERT INTO document_move_log (id, document_id, tenant_id, from_path, to_path, reason, moved_by, moved_by_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), req.params.id, req.tenantId, fromPath, toPath, reason || 'Moved across DIA folder hierarchy', req.user.id, req.user.name);
+  } catch (e) {}
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Moved', objectType: 'document', objectId: req.params.id, detail: `Moved from ${fromPath} to ${toPath}`, ip: req.ip });
   res.json({ document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id), message: 'Document moved' });
 });
 
-// ── PATCH /api/documents/:id/inactivate ──────────────────────
-router.patch('/:id/inactivate', blockInspector, requireCap('canAdmin'), (req, res) => {
+// ── DELETE /api/documents/:id & PATCH /api/documents/:id/inactivate ──
+const handleInactivateDoc = (req, res) => {
   const db = getDB();
-  const { reason } = req.body;
+  const reason = req.body?.reason || req.query?.reason || 'Soft deleted / Inactivated';
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
   db.prepare('UPDATE documents SET active = 0 WHERE id = ?').run(req.params.id);
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Inactivated', objectType: 'document', objectId: req.params.id, detail: reason || 'Soft deleted', ip: req.ip });
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Inactivated', objectType: 'document', objectId: req.params.id, detail: reason, ip: req.ip });
   res.json({ message: 'Document inactivated (soft deleted)' });
-});
+};
+
+router.patch('/:id/inactivate', blockInspector, requireCap('canAdmin'), handleInactivateDoc);
+router.delete('/:id', blockInspector, requireCap('canAdmin'), handleInactivateDoc);
 
 // ── PATCH /api/documents/:id/pin ─────────────────────────────
 router.patch('/:id/pin', blockInspector, (req, res) => {
@@ -531,17 +627,77 @@ router.patch('/:id/redact', blockInspector, requireCap('canUpload'), (req, res) 
 // ── POST /api/documents/:id/annotations ──────────────────────
 router.post('/:id/annotations', blockInspector, (req, res) => {
   const db = getDB();
-  const { annotation_type, annotation_text, page_number, position_x, position_y } = req.body;
-  if (!annotation_text) return res.status(400).json({ error: 'annotation_text required' });
+  const { annotation_type, annotation_text, text, page_number, position_x, position_y } = req.body;
+  const content = annotation_text || text;
+  if (!content) return res.status(400).json({ error: 'annotation_text required' });
 
   const annId = uuid();
   db.prepare(`
-    INSERT INTO annotations (id, tenant_id, document_id, user_id, annotation_type, annotation_text, page_number, position_x, position_y)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(annId, req.tenantId, req.params.id, req.user.id, annotation_type || 'Note', annotation_text, page_number || 1, position_x || 0, position_y || 0);
+    INSERT INTO annotations (id, tenant_id, document_id, user_id, text, annotation_type, annotation_text, page_number, position_x, position_y, replies, resolved)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 0)
+  `).run(annId, req.tenantId, req.params.id, req.user.id, content, annotation_type || 'Note', content, page_number || 1, position_x || 0, position_y || 0);
 
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Annotated', objectType: 'document', objectId: req.params.id, detail: `Added ${annotation_type || 'Note'}: ${annotation_text.slice(0,50)}`, ip: req.ip });
-  res.status(201).json({ message: 'Annotation added', id: annId });
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Annotated', objectType: 'document', objectId: req.params.id, detail: `Added ${annotation_type || 'Note'}: ${content.slice(0,50)}`, ip: req.ip });
+  res.status(201).json({ message: 'Annotation added', id: annId, annotation: db.prepare('SELECT * FROM annotations WHERE id = ?').get(annId) });
+});
+
+// ── POST /api/documents/:id/annotations/:annId/reply ─────────
+router.post('/:id/annotations/:annId/reply', blockInspector, (req, res) => {
+  const db = getDB();
+  const { text, resolve } = req.body;
+  if (!text) return res.status(400).json({ error: 'Reply text required' });
+
+  const ann = db.prepare('SELECT * FROM annotations WHERE id = ? AND document_id = ? AND tenant_id = ?').get(req.params.annId, req.params.id, req.tenantId);
+  if (!ann) return res.status(404).json({ error: 'Annotation not found' });
+
+  let replies = [];
+  try { replies = JSON.parse(ann.replies || '[]'); } catch (e) { replies = []; }
+  const replyObj = {
+    id: uuid(),
+    user_id: req.user.id,
+    user_name: req.user.name,
+    text,
+    created_at: new Date().toISOString()
+  };
+  replies.push(replyObj);
+
+  const resolvedVal = resolve !== undefined ? (resolve ? 1 : 0) : (ann.resolved || 0);
+  db.prepare('UPDATE annotations SET replies = ?, resolved = ? WHERE id = ?')
+    .run(JSON.stringify(replies), resolvedVal, req.params.annId);
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Annotation Reply', objectType: 'document', objectId: req.params.id, detail: `Replied to annotation ${req.params.annId}`, ip: req.ip });
+  res.json({ message: 'Reply added', reply: replyObj, replies, resolved: Boolean(resolvedVal) });
+});
+
+// ── GET /api/documents/:id/notes ─────────────────────────────
+router.get('/:id/notes', (req, res) => {
+  const db = getDB();
+  const notes = db.prepare('SELECT * FROM document_notes WHERE document_id = ? AND tenant_id = ? ORDER BY created_at DESC').all(req.params.id, req.tenantId);
+  res.json({ notes });
+});
+
+// ── POST /api/documents/:id/notes ────────────────────────────
+router.post('/:id/notes', blockInspector, (req, res) => {
+  const db = getDB();
+  const { text, visibility = 'Public', noteToFile = false, showAllVersions = true } = req.body;
+  if (!text) return res.status(400).json({ error: 'Note text is required' });
+
+  const noteId = uuid();
+  db.prepare(`
+    INSERT INTO document_notes (id, document_id, tenant_id, user_id, user_name, text, visibility, note_to_file, show_all_versions)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(noteId, req.params.id, req.tenantId, req.user.id, req.user.name, text, visibility, noteToFile ? 1 : 0, showAllVersions ? 1 : 0);
+
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Note Added', objectType: 'document', objectId: req.params.id, detail: `${visibility} Note: ${text.slice(0, 50)}`, ip: req.ip });
+  res.status(201).json({ note: db.prepare('SELECT * FROM document_notes WHERE id = ?').get(noteId), message: 'Sticky note added' });
+});
+
+// ── DELETE /api/documents/:id/notes/:noteId ──────────────────
+router.delete('/:id/notes/:noteId', blockInspector, (req, res) => {
+  const db = getDB();
+  db.prepare('DELETE FROM document_notes WHERE id = ? AND document_id = ? AND tenant_id = ?').run(req.params.noteId, req.params.id, req.tenantId);
+  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Note Deleted', objectType: 'document', objectId: req.params.id, detail: `Removed note ${req.params.noteId}`, ip: req.ip });
+  res.json({ message: 'Sticky note deleted' });
 });
 
 // ── DELETE /api/documents/:id/annotations/:annId ─────────────
@@ -558,6 +714,11 @@ router.get('/:id/view', (req, res) => {
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
   
+  try {
+    db.prepare('INSERT INTO document_access_log (id, document_id, tenant_id, user_id, user_name, action, version, ip_address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(uuid(), req.params.id, req.tenantId, req.user.id, req.user.name, 'Viewed', doc.version, req.ip);
+  } catch (e) {}
+
   appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: 'Viewed', objectType: 'document', objectId: req.params.id, objectName: doc.title, ip: req.ip });
 
   if (doc.file_path && existsSync(doc.file_path)) {
@@ -592,6 +753,86 @@ router.get('/:id/view', (req, res) => {
     hasBinary: false,
     message: 'No physical binary file attached to this record',
     document: doc
+  });
+});
+
+// ── GET /api/documents/:id/access-history ────────────────────
+router.get('/:id/access-history', (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT id, title FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const history = db.prepare('SELECT * FROM document_access_log WHERE document_id = ? AND tenant_id = ? ORDER BY created_at DESC').all(req.params.id, req.tenantId);
+  res.json({ documentId: req.params.id, title: doc.title, history });
+});
+
+// ── POST /api/documents/:id/quality-check ────────────────────
+router.post('/:id/quality-check', blockInspector, (req, res) => {
+  const db = getDB();
+  const { passed = true, checklist = [], comments = '' } = req.body;
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const newStatus = passed ? (doc.status === 'Draft' ? 'Pending Review' : doc.status) : 'Rejected';
+  db.prepare('UPDATE documents SET status = ? WHERE id = ?').run(newStatus, req.params.id);
+
+  if (!passed && comments) {
+    try {
+      db.prepare(`
+        INSERT INTO queries (id, tenant_id, document_id, study_id, query_type, severity, text, raised_by, assigned_to, status, due_date)
+        VALUES (?, ?, ?, ?, 'Quality Check Issue', 'Major', ?, ?, ?, 'Open', date('now', '+7 days'))
+      `).run(uuid(), req.tenantId, req.params.id, doc.study_id, `QC Failed: ${comments}`, req.user.id, doc.author_id || doc.created_by);
+    } catch (e) {}
+  }
+
+  appendAudit({
+    tenantId: req.tenantId,
+    documentId: req.params.id,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: passed ? 'Quality Check Passed' : 'Quality Check Failed',
+    objectType: 'document',
+    objectId: req.params.id,
+    detail: `Checklist items: ${checklist.length} | Comments: ${comments}`,
+    ip: req.ip
+  });
+
+  res.json({
+    message: passed ? 'Quality Check passed' : 'Quality Check failed and query raised',
+    passed,
+    document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
+  });
+});
+
+// ── PATCH /api/documents/:id/self-assign ─────────────────────
+router.patch('/:id/self-assign', blockInspector, (req, res) => {
+  const db = getDB();
+  const { release = false, role = 'reviewer' } = req.body;
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const targetUserId = release ? null : req.user.id;
+  if (role === 'approver') {
+    db.prepare('UPDATE documents SET approver_id = ? WHERE id = ?').run(targetUserId, req.params.id);
+  } else {
+    db.prepare('UPDATE documents SET reviewer_id = ? WHERE id = ?').run(targetUserId, req.params.id);
+  }
+
+  appendAudit({
+    tenantId: req.tenantId,
+    documentId: req.params.id,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: release ? 'Released Ownership' : 'Self-Assigned',
+    objectType: 'document',
+    objectId: req.params.id,
+    detail: `${release ? 'Released' : 'Claimed'} ${role} role`,
+    ip: req.ip
+  });
+
+  res.json({
+    message: release ? 'Document ownership released' : `Self-assigned as ${role}`,
+    document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
   });
 });
 
@@ -644,10 +885,35 @@ router.post('/quick-upload', blockInspector, requireCap('canUpload'), upload.sin
 // ── PATCH /api/documents/:id/blind ───────────────────────────
 router.patch('/:id/blind', blockInspector, requireCap('canAdmin'), (req, res) => {
   const db = getDB();
-  const { isBlinded } = req.body;
-  db.prepare('UPDATE documents SET confidential = ? WHERE id = ? AND tenant_id = ?').run(isBlinded ? 1 : 0, req.params.id, req.tenantId);
-  appendAudit({ tenantId: req.tenantId, documentId: req.params.id, userId: req.user.id, userName: req.user.name, action: isBlinded ? 'Blinded' : 'Unblinded', objectType: 'document', objectId: req.params.id, ip: req.ip });
-  res.json({ message: `Document ${isBlinded ? 'blinded' : 'unblinded'} successfully` });
+  const { blind, isBlinded, reason } = req.body;
+  const targetBlind = blind !== undefined ? Boolean(blind) : Boolean(isBlinded);
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'Justification reason is required for blinding/unblinding', code: 'REASON_REQUIRED' });
+  }
+
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  db.prepare('UPDATE documents SET confidential = ?, is_blinded = ? WHERE id = ? AND tenant_id = ?')
+    .run(targetBlind ? 1 : 0, targetBlind ? 1 : 0, req.params.id, req.tenantId);
+
+  appendAudit({
+    tenantId: req.tenantId,
+    documentId: req.params.id,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: targetBlind ? 'Blinded' : 'Unblinded',
+    objectType: 'document',
+    objectId: req.params.id,
+    detail: `Reason: ${reason}`,
+    ip: req.ip
+  });
+
+  res.json({
+    message: `Document ${targetBlind ? 'blinded' : 'unblinded'} successfully`,
+    is_blinded: targetBlind ? 1 : 0,
+    document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
+  });
 });
 
 export default router;

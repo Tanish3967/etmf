@@ -54,8 +54,11 @@ async function run() {
   console.log('\n🧪 eTMF Pro Backend Test Suite\n');
 
   try {
-    initDB();
+    await initDB();
     const db = getDB();
+    db.prepare("DELETE FROM password_history WHERE user_id LIKE 'usr-p1-%'").run();
+    db.prepare("DELETE FROM sessions WHERE user_id LIKE 'usr-p1-%'").run();
+    db.prepare("DELETE FROM users WHERE id LIKE 'usr-p1-%'").run();
     db.prepare("UPDATE documents SET status = 'Draft', title = 'Statistical Analysis Plan v1.0' WHERE id = 'doc-005'").run();
     db.prepare("DELETE FROM studies WHERE protocol_number = 'TEST-2025-099'").run();
     db.prepare("UPDATE users SET failed_attempts = 0, locked_until = NULL").run();

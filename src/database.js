@@ -564,6 +564,63 @@ export async function initDB() {
 
   // Phase 5: Security & Application Administration Enhancements (§8.5)
   addColumn('users', 'auth_type', "TEXT DEFAULT 'DB'");
+  addColumn('documents', 'is_blinded', 'INTEGER DEFAULT 0');
+  addColumn('annotations', 'annotation_type', "TEXT DEFAULT 'Note'");
+  addColumn('annotations', 'annotation_text', 'TEXT');
+  addColumn('annotations', 'position_x', 'REAL DEFAULT 0');
+  addColumn('annotations', 'position_y', 'REAL DEFAULT 0');
+  addColumn('annotations', 'replies', "TEXT DEFAULT '[]'");
+  addColumn('annotations', 'resolved', 'INTEGER DEFAULT 0');
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS document_notes (
+        id              TEXT PRIMARY KEY,
+        document_id     TEXT NOT NULL REFERENCES documents(id),
+        tenant_id       TEXT NOT NULL,
+        user_id         TEXT NOT NULL REFERENCES users(id),
+        user_name       TEXT,
+        text            TEXT NOT NULL,
+        visibility      TEXT DEFAULT 'Reviewer,Approver',
+        note_to_file    INTEGER DEFAULT 0,
+        show_all_versions INTEGER DEFAULT 1,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS document_access_log (
+        id              TEXT PRIMARY KEY,
+        document_id     TEXT NOT NULL REFERENCES documents(id),
+        tenant_id       TEXT NOT NULL,
+        user_id         TEXT REFERENCES users(id),
+        user_name       TEXT,
+        user_role       TEXT,
+        action          TEXT NOT NULL,
+        version         TEXT,
+        ip_address      TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS document_move_log (
+        id              TEXT PRIMARY KEY,
+        document_id     TEXT NOT NULL REFERENCES documents(id),
+        tenant_id       TEXT NOT NULL,
+        from_path       TEXT,
+        to_path         TEXT,
+        reason          TEXT,
+        moved_by        TEXT,
+        moved_by_name   TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS document_copy_log (
+        id              TEXT PRIMARY KEY,
+        source_doc_id   TEXT NOT NULL REFERENCES documents(id),
+        target_doc_id   TEXT NOT NULL REFERENCES documents(id),
+        tenant_id       TEXT NOT NULL,
+        from_path       TEXT,
+        to_path         TEXT,
+        copied_by       TEXT,
+        copied_by_name  TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+    `);
+  } catch (e) {}
   addColumn('user_groups', 'privileges', "TEXT DEFAULT '[]'");
   addColumn('user_groups', 'folder_assignments', "TEXT DEFAULT '[]'");
   addColumn('studies', 'countries', "TEXT DEFAULT '[]'");
