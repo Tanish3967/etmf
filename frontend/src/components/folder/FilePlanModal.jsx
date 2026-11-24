@@ -11,9 +11,12 @@ export default function FilePlanModal({ studyId = 'study-001', onClose }) {
   const loadData = useCallback(async () => {
     if (!studyId) return;
     setLoading(true);
+    setError('');
     try {
-      const edlRes = await api.get(`/studies/${studyId}/edl`);
-      const compRes = await api.get(`/studies/${studyId}/completeness`);
+      const [edlRes, compRes] = await Promise.all([
+        api.get(`/edl?studyId=${encodeURIComponent(studyId)}`),
+        api.get(`/studies/${encodeURIComponent(studyId)}/completeness`)
+      ]);
       setEdlItems(edlRes.data.edl || []);
       setCompleteness(compRes.data);
     } catch (err) {
@@ -38,7 +41,7 @@ export default function FilePlanModal({ studyId = 'study-001', onClose }) {
 
     setActioningId(item.id);
     try {
-      await api.post(`/edl/${item.id}/na`, {
+      await api.patch(`/edl/${item.id}/na`, {
         designated: !isCurrentlyNA,
         reason: reason.trim()
       });
@@ -53,7 +56,7 @@ export default function FilePlanModal({ studyId = 'study-001', onClose }) {
   const handleToggleMandatory = async (item) => {
     setActioningId(item.id);
     try {
-      await api.patch(`/edl/${item.id}/mandatory`, {
+      await api.patch(`/edl/${item.id}/optional`, {
         mandatory: !item.mandatory
       });
       await loadData();

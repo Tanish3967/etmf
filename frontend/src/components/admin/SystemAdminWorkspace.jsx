@@ -25,6 +25,15 @@ export default function SystemAdminWorkspace() {
   const [users, setUsers] = useState([]);
   const [newDelegation, setNewDelegation] = useState({ delegator_id: "", delegatee_id: "", start_date: "", end_date: "" });
 
+  // Ref 1 System Admin Console states (U-01, U-02, U-03, U-04, C-05)
+  const [setupChecklist, setSetupChecklist] = useState(null);
+  const [tmfModels, setTmfModels] = useState(null);
+  const [edlTemplates, setEdlTemplates] = useState([]);
+  const [edlDiff, setEdlDiff] = useState(null);
+  const [milestonesConfig, setMilestonesConfig] = useState([]);
+  const [permissionsMatrix, setPermissionsMatrix] = useState(null);
+  const [newCustomTplName, setNewCustomTplName] = useState("");
+
   useEffect(() => {
     async function fetchInitialData() {
       try {
@@ -56,6 +65,20 @@ export default function SystemAdminWorkspace() {
         // Users for delegation picker
         const usersRes = await api.get("/users");
         setUsers(usersRes.data?.users || []);
+
+        // Ref 1 System Admin Console data
+        const [chkRes, tmfRes, edlRes, msRes, permRes] = await Promise.all([
+          api.get("/admin/setup-checklist"),
+          api.get("/admin/tmf-models"),
+          api.get("/admin/edl-templates"),
+          api.get("/admin/milestones-config"),
+          api.get("/admin/permissions-matrix"),
+        ]);
+        setSetupChecklist(chkRes.data || null);
+        setTmfModels(tmfRes.data || null);
+        setEdlTemplates(edlRes.data?.templates || []);
+        setMilestonesConfig(msRes.data?.milestones || []);
+        setPermissionsMatrix(permRes.data || null);
       } catch (err) {
         console.error("Failed to load system admin data:", err);
       }
@@ -153,7 +176,56 @@ export default function SystemAdminWorkspace() {
     }
   }
 
+  const handleSaveMilestones = async () => {
+    try {
+      const res = await api.put("/admin/milestones-config", { milestones: milestonesConfig });
+      setMilestonesConfig(res.data?.milestones || milestonesConfig);
+      setMessage("M01–M12 Milestone Due Days saved successfully (Ref 1 Screen 6).");
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to save milestone due days.");
+    }
+  };
+
+  const handleCloneEdlTemplate = async (e) => {
+    e.preventDefault();
+    if (!newCustomTplName.trim()) return;
+    try {
+      await api.post("/admin/edl-templates", { name: newCustomTplName.trim(), baseModelVersion: "DIA v3.2" });
+      setNewCustomTplName("");
+      const edlRes = await api.get("/admin/edl-templates");
+      setEdlTemplates(edlRes.data?.templates || []);
+      setMessage("Custom EDL Template cloned in Draft mode.");
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to clone custom EDL template.");
+    }
+  };
+
+  const handlePublishEdlTemplate = async (id) => {
+    try {
+      await api.post(`/admin/edl-templates/${id}/publish`);
+      const edlRes = await api.get("/admin/edl-templates");
+      setEdlTemplates(edlRes.data?.templates || []);
+      setMessage("EDL Template published and permanently locked.");
+    } catch (err) {
+      setError(err.response?.data?.error || "Failed to publish EDL template.");
+    }
+  };
+
+  const handleCompareTemplates = async () => {
+    try {
+      const res = await api.get("/admin/edl-templates/compare?t1=edl-tpl-v30&t2=edl-tpl-v32");
+      setEdlDiff(res.data);
+    } catch {
+      setError("Failed to compare EDL templates.");
+    }
+  };
+
   const tabs = [
+    { id: "setup_checklist", label: "One-Time Setup Checklist (Ref 1)", icon: "✅" },
+    { id: "tmf_models", label: "View TMF Model (v3.0 vs v3.2)", icon: "📐" },
+    { id: "edl_templates", label: "EDL Templates (Draft/Publish)", icon: "📋" },
+    { id: "milestones", label: "Configure Milestones (M01-M12)", icon: "🏁" },
+    { id: "permissions", label: "Role Permissions Matrix", icon: "🔐" },
     { id: "integrations", label: "External Systems Sync (§8.5.3.1)", icon: "🔌" },
     { id: "workflows", label: "Workflow Templates (§8.5.3.2)", icon: "🔀" },
     { id: "delegations", label: "Delegation of Authority (§8.5.3.3)", icon: "👥" },
@@ -214,6 +286,242 @@ export default function SystemAdminWorkspace() {
 
       {/* CONTENT PANES */}
       <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e2e8f0", padding: 24 }}>
+        {/* REF 1 TAB: ONE-TIME SETUP CHECKLIST */}
+        {activeTab === "setup_checklist" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "#1e293b" }}>
+                  One-Time System Setup Checklist (Ref 1 Screen 1)
+                </h3>
+                <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                  All 5 foundation steps must be verified before TMF Managers can create clinical studies
+                </div>
+              </div>
+              <span style={{ padding: "6px 14px", borderRadius: 20, fontWeight: 700, fontSize: 12, background: setupChecklist?.isReadyForStudyCreation ? "#dcfce7" : "#fef3c7", color: setupChecklist?.isReadyForStudyCreation ? "#166534" : "#92400e" }}>
+                {setupChecklist?.completedCount ?? 5}/5 Steps Complete — {setupChecklist?.isReadyForStudyCreation ? "Ready for Study Creation" : "Setup Pending"}
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {(setupChecklist?.steps || []).map((st) => (
+                <div key={st.step} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ width: 26, height: 26, borderRadius: "50%", background: st.completed ? "#16a34a" : "#94a3b8", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12 }}>
+                      {st.completed ? "✓" : st.step}
+                    </span>
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a" }}>Step {st.step}: {st.title}</div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>Tenant foundation prerequisite</div>
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: st.completed ? "#15803d" : "#d97706" }}>
+                    {st.completed ? "Verified" : "Pending"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* REF 1 TAB: VIEW TMF MODEL (v3.0 vs v3.2) */}
+        {activeTab === "tmf_models" && (
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 6px 0", color: "#1e293b" }}>
+              DIA TMF Reference Model Viewer — v3.0 vs v3.2 Comparison (Ref 1 Screen 2)
+            </h3>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+              System-loaded read-only models. TMF Manager selects the model version per study during Study Setup.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              {(tmfModels?.models || []).map((m) => (
+                <div key={m.version} style={{ padding: 16, border: "1px solid #e2e8f0", borderRadius: 8, background: "#f8fafc" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ fontWeight: 800, fontSize: 16, color: "#0284c7" }}>{m.version} ({m.releaseYear})</span>
+                    <span style={{ fontSize: 11, padding: "2px 8px", background: "#dcfce7", color: "#166534", borderRadius: 4, fontWeight: 700 }}>{m.status}</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 12, textAlign: "center" }}>
+                    <div style={{ background: "#fff", padding: 8, borderRadius: 6, border: "1px solid #e2e8f0" }}><div style={{ fontWeight: 800, fontSize: 16 }}>{m.zonesCount}</div><div style={{ fontSize: 11, color: "#64748b" }}>Zones</div></div>
+                    <div style={{ background: "#fff", padding: 8, borderRadius: 6, border: "1px solid #e2e8f0" }}><div style={{ fontWeight: 800, fontSize: 16 }}>{m.sectionsCount}</div><div style={{ fontSize: 11, color: "#64748b" }}>Sections</div></div>
+                    <div style={{ background: "#fff", padding: 8, borderRadius: 6, border: "1px solid #e2e8f0" }}><div style={{ fontWeight: 800, fontSize: 16 }}>{m.artifactsCount}</div><div style={{ fontSize: 11, color: "#64748b" }}>Artifacts</div></div>
+                    <div style={{ background: "#fff", padding: 8, borderRadius: 6, border: "1px solid #e2e8f0" }}><div style={{ fontWeight: 800, fontSize: 16 }}>{m.docTypesCount}</div><div style={{ fontSize: 11, color: "#64748b" }}>Doc Types</div></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {tmfModels?.versionComparison && (
+              <div style={{ padding: 14, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#0369a1", marginBottom: 6 }}>
+                  Version Diff ({tmfModels.versionComparison.fromVersion} ➔ {tmfModels.versionComparison.toVersion}): Sections {tmfModels.versionComparison.delta.sections} | Artifacts {tmfModels.versionComparison.delta.artifacts} | Doc Types {tmfModels.versionComparison.delta.docTypes}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* REF 1 TAB: EDL TEMPLATES (DRAFT / PUBLISH / COMPARE) */}
+        {activeTab === "edl_templates" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "#1e293b" }}>
+                  Default & Custom EDL Templates (Ref 1 Screens 3–5)
+                </h3>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  Published templates are permanently locked. Clone a new version in Draft to customize artifacts.
+                </div>
+              </div>
+              <button type="button" onClick={handleCompareTemplates} style={{ padding: "6px 12px", background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                🔍 Compare v3.0 vs v3.2 Diff
+              </button>
+            </div>
+            <form onSubmit={handleCloneEdlTemplate} style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+              <input
+                type="text"
+                placeholder="New Custom EDL Template Name (e.g. AcmePharma Oncology Phase 2)..."
+                value={newCustomTplName}
+                onChange={(e) => setNewCustomTplName(e.target.value)}
+                style={{ flex: 1, padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 13 }}
+              />
+              <button type="submit" style={{ padding: "8px 16px", background: "#0284c7", color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
+                + Clone Custom EDL Template (Draft)
+              </button>
+            </form>
+            {edlDiff && (
+              <div style={{ marginBottom: 16, padding: 12, background: "#f8fafc", border: "1px solid #cbd5e1", borderRadius: 8, fontSize: 12 }}>
+                <strong>Comparison Diff ({edlDiff.template1?.name} vs {edlDiff.template2?.name}):</strong> +{edlDiff.diff?.addedCount} Added | -{edlDiff.diff?.removedCount} Removed | {edlDiff.diff?.modifiedCount} Modified
+              </div>
+            )}
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+                  <th style={{ padding: "10px 14px" }}>Template Name</th>
+                  <th style={{ padding: "10px 14px" }}>Base Model</th>
+                  <th style={{ padding: "10px 14px" }}>Type</th>
+                  <th style={{ padding: "10px 14px" }}>Status</th>
+                  <th style={{ padding: "10px 14px" }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {edlTemplates.map((t) => (
+                  <tr key={t.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px 14px", fontWeight: 700 }}>{t.name}</td>
+                    <td style={{ padding: "10px 14px" }}>{t.base_model_version}</td>
+                    <td style={{ padding: "10px 14px" }}>{t.is_default ? "System Default (Read-Only)" : "Custom Template"}</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, background: t.status === "Published" ? "#dcfce7" : "#fef3c7", color: t.status === "Published" ? "#166534" : "#92400e" }}>
+                        {t.status} {t.is_locked ? "🔒" : ""}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {t.status === "Draft" ? (
+                        <button type="button" onClick={() => handlePublishEdlTemplate(t.id)} style={{ padding: "4px 10px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 4, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                          Publish & Lock
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 11, color: "#64748b" }}>Immutable</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* REF 1 TAB: CONFIGURE MILESTONES (M01-M12) */}
+        {activeTab === "milestones" && (
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <div>
+                <h3 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "#1e293b" }}>
+                  Configure Milestones M01–M12 Due Days (Ref 1 Screen 6)
+                </h3>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  Formula: EDL Item Due Date = Milestone Actual Date + Due Days. M11 (Ongoing) is always active from Study Activation.
+                </div>
+              </div>
+              <button type="button" onClick={handleSaveMilestones} style={{ padding: "8px 16px", background: "#0284c7", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: "pointer" }}>
+                💾 Save Milestone Due Days
+              </button>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+                  <th style={{ padding: "10px 14px" }}>Code</th>
+                  <th style={{ padding: "10px 14px" }}>Milestone Name</th>
+                  <th style={{ padding: "10px 14px" }}>Level</th>
+                  <th style={{ padding: "10px 14px" }}>EDL Items</th>
+                  <th style={{ padding: "10px 14px" }}>Due Days</th>
+                </tr>
+              </thead>
+              <tbody>
+                {milestonesConfig.map((m, idx) => (
+                  <tr key={m.code} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px 14px", fontWeight: 800, color: "#0284c7" }}>{m.code}</td>
+                    <td style={{ padding: "10px 14px", fontWeight: 600 }}>{m.name}</td>
+                    <td style={{ padding: "10px 14px" }}>{m.level}</td>
+                    <td style={{ padding: "10px 14px" }}>{m.edl_items_count} items</td>
+                    <td style={{ padding: "10px 14px" }}>
+                      {m.is_ongoing || m.code === "M11" ? (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#15803d" }}>Ongoing (Always Active)</span>
+                      ) : (
+                        <input
+                          type="number"
+                          min="1"
+                          max="180"
+                          value={m.due_days}
+                          onChange={(e) => {
+                            const updated = [...milestonesConfig];
+                            updated[idx] = { ...m, due_days: Number(e.target.value) };
+                            setMilestonesConfig(updated);
+                          }}
+                          style={{ width: 70, padding: "4px 8px", border: "1px solid #cbd5e1", borderRadius: 4 }}
+                        />
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* REF 1 TAB: FIXED ROLE PERMISSIONS MATRIX */}
+        {activeTab === "permissions" && (
+          <div>
+            <h3 style={{ fontSize: 16, fontWeight: 700, margin: "0 0 6px 0", color: "#1e293b" }}>
+              Fixed Read-Only Role Permissions Matrix (Ref 1 Screen 8)
+            </h3>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
+              {permissionsMatrix?.rule || "Permissions are fixed per role by regulatory policy (21 CFR Part 11 & ICH E6 GCP) and cannot be edited."}
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+                  <th style={{ padding: "10px 12px" }}>Permission</th>
+                  <th style={{ padding: "10px 12px" }}>System Admin</th>
+                  <th style={{ padding: "10px 12px" }}>TMF Manager</th>
+                  <th style={{ padding: "10px 12px" }}>CRA / Author</th>
+                  <th style={{ padding: "10px 12px" }}>Reviewer</th>
+                  <th style={{ padding: "10px 12px" }}>Approver</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(permissionsMatrix?.rows || []).map((r) => (
+                  <tr key={r.permission} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px 12px", fontWeight: 700 }}>{r.permission}</td>
+                    <td style={{ padding: "10px 12px" }}>{r.systemAdmin ? "✅ Yes" : "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>{r.tmfManager ? "✅ Yes" : "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>{r.cra ? "✅ Yes" : "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>{r.reviewer ? "✅ Yes" : "—"}</td>
+                    <td style={{ padding: "10px 12px" }}>{r.approver ? "✅ Yes" : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {/* TAB 1: INTEGRATIONS */}
         {activeTab === "integrations" && (
           <div>

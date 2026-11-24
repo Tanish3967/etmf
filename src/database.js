@@ -717,6 +717,7 @@ export async function initDB() {
   await seedDemoData();
   await seedSecurityAndAdminData(db);
   await seedPhase6Data(db);
+  await seedPhase7ThreeReferenceSchemaAndData(db);
   console.log('✅ Database initialised');
   return db;
 }
@@ -1076,6 +1077,506 @@ async function seedPhase6Data(db) {
     }
   } catch (e) {
     console.error('Error seeding Phase 6 data:', e.message);
+  }
+}
+
+async function seedPhase7ThreeReferenceSchemaAndData(db) {
+  try {
+    const addCol = (table, col, def) => {
+      try { db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`); } catch (e) {}
+    };
+
+    // Add Phase 7 columns to existing tables
+    addCol('users', 'otp_status', "TEXT DEFAULT 'Active'");
+    addCol('users', 'otp_code_hash', 'TEXT');
+    addCol('users', 'otp_expires_at', 'TEXT');
+    addCol('users', 'deactivation_effective_at', 'TEXT');
+    addCol('users', 'deactivation_reason', 'TEXT');
+
+    addCol('studies', 'blinding_type', "TEXT DEFAULT 'Double Blind'");
+    addCol('studies', 'randomisation', "TEXT DEFAULT 'Randomised'");
+    addCol('studies', 'drug_ip_name', "TEXT DEFAULT 'XYZ-001'");
+    addCol('studies', 'edl_template_id', 'TEXT');
+    addCol('studies', 'fpi_planned_date', 'TEXT');
+    addCol('studies', 'fpi_actual_date', 'TEXT');
+    addCol('studies', 'retention_years', 'INTEGER DEFAULT 25');
+    addCol('studies', 'retention_end_date', 'TEXT');
+    addCol('studies', 'archive_destination', "TEXT DEFAULT 'Platform Cloud Archive'");
+    addCol('studies', 'archive_checksum', 'TEXT');
+    addCol('studies', 'archived_at', 'TEXT');
+    addCol('studies', 'ai_enabled', 'INTEGER DEFAULT 1');
+
+    addCol('placeholders', 'level', "TEXT DEFAULT 'Study'");
+    addCol('placeholders', 'country', 'TEXT');
+    addCol('placeholders', 'site_id', 'TEXT');
+    addCol('placeholders', 'milestone_code', "TEXT DEFAULT 'M02'");
+    addCol('placeholders', 'due_status', "TEXT DEFAULT 'Pending'");
+    addCol('placeholders', 'due_date', 'TEXT');
+    addCol('placeholders', 'escalation_stage', "TEXT DEFAULT 'None'");
+    addCol('placeholders', 'last_reminded_at', 'TEXT');
+    addCol('placeholders', 'escalated_at', 'TEXT');
+    addCol('placeholders', 'assigned_cra_id', 'TEXT');
+
+    addCol('queries', 'level', "TEXT DEFAULT 'Document'");
+    addCol('queries', 'country', 'TEXT');
+    addCol('queries', 'site_id', 'TEXT');
+    addCol('queries', 'placeholder_id', 'TEXT');
+    addCol('queries', 'validated_by', 'TEXT');
+    addCol('queries', 'capa_triggered', 'INTEGER DEFAULT 0');
+
+    addCol('documents', 'language', "TEXT DEFAULT 'EN'");
+    addCol('documents', 'format', "TEXT DEFAULT 'PDF/A-1b'");
+    addCol('documents', 'keywords', 'TEXT');
+    addCol('documents', 'sponsor_doc_code', 'TEXT');
+    addCol('documents', 'doc_number', 'TEXT');
+
+    // Create Phase 7 tables & WORM triggers on audit_log
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_update
+      BEFORE UPDATE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, '21 CFR Part 11 violation: audit_log is immutable (WORM) and cannot be updated');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_audit_log_no_delete
+      BEFORE DELETE ON audit_log
+      BEGIN
+        SELECT RAISE(ABORT, '21 CFR Part 11 violation: audit_log is immutable (WORM) and cannot be deleted');
+      END;
+
+      CREATE TABLE IF NOT EXISTS tenant_setup_progress (
+        tenant_id               TEXT PRIMARY KEY,
+        step1_tmf_model         INTEGER DEFAULT 1,
+        step2_edl_template      INTEGER DEFAULT 1,
+        step3_milestones        INTEGER DEFAULT 1,
+        step4_user_management   INTEGER DEFAULT 1,
+        step5_role_permissions  INTEGER DEFAULT 1,
+        selected_tmf_model      TEXT DEFAULT 'v3.2',
+        selected_edl_template_id TEXT DEFAULT 'edl-tpl-v32',
+        updated_at              TEXT DEFAULT (datetime('now')),
+        updated_by              TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS tenant_milestone_configs (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        code            TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        study_level     INTEGER DEFAULT 1,
+        country_level   INTEGER DEFAULT 1,
+        site_level      INTEGER DEFAULT 1,
+        due_days        INTEGER DEFAULT 30,
+        milestone_type  TEXT DEFAULT 'One-time',
+        UNIQUE(tenant_id, code)
+      );
+
+      CREATE TABLE IF NOT EXISTS edl_templates (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        description     TEXT,
+        base_version    TEXT DEFAULT 'v3.2',
+        version_number  TEXT DEFAULT '1.0',
+        status          TEXT DEFAULT 'Published', -- 'Default', 'Draft', 'Published', 'Deactivated'
+        is_default      INTEGER DEFAULT 0,
+        is_locked       INTEGER DEFAULT 0,
+        study_count     INTEGER DEFAULT 156,
+        country_count   INTEGER DEFAULT 100,
+        site_count      INTEGER DEFAULT 95,
+        optional_excluded INTEGER DEFAULT 106,
+        items_json      TEXT DEFAULT '[]',
+        created_by      TEXT,
+        created_at      TEXT DEFAULT (datetime('now')),
+        published_at    TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS tmf_overlays (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        base_model      TEXT DEFAULT 'v3.2',
+        changes_json    TEXT DEFAULT '[]',
+        created_by      TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS study_milestones (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        study_id        TEXT NOT NULL REFERENCES studies(id),
+        code            TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        level           TEXT DEFAULT 'Study', -- 'Study', 'Country', 'Site'
+        country         TEXT,
+        site_id         TEXT,
+        planned_date    TEXT,
+        actual_date     TEXT,
+        status          TEXT DEFAULT 'pending', -- 'pending', 'active', 'done', 'always', 'overdue'
+        edl_triggered_count INTEGER DEFAULT 0,
+        notes           TEXT,
+        updated_by      TEXT,
+        updated_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS study_user_assignments (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        study_id        TEXT NOT NULL REFERENCES studies(id),
+        user_id         TEXT NOT NULL REFERENCES users(id),
+        role            TEXT NOT NULL,
+        countries_json  TEXT DEFAULT '[]',
+        sites_json      TEXT DEFAULT '[]',
+        scope_label     TEXT DEFAULT 'All Sites',
+        status          TEXT DEFAULT 'Active',
+        assigned_by     TEXT,
+        assigned_at     TEXT DEFAULT (datetime('now')),
+        UNIQUE(tenant_id, study_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS review_rules (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        study_id        TEXT NOT NULL REFERENCES studies(id),
+        name            TEXT NOT NULL,
+        rule_level      TEXT NOT NULL, -- 'Artifact', 'Zone', 'Study', 'Catch-all'
+        priority_order  INTEGER DEFAULT 3, -- 1=Artifact, 2=Zone, 3=Study, 4=Catch-all
+        trigger_code    TEXT, -- e.g. '05.03.07' or '07' or '*'
+        repository_scope TEXT DEFAULT 'All Sites',
+        workflow_type   TEXT DEFAULT 'Two-Step',
+        reviewer_id     TEXT,
+        reviewer_name   TEXT,
+        approver_id     TEXT,
+        approver_name   TEXT,
+        fallback_reviewer_id TEXT,
+        due_days        INTEGER DEFAULT 14,
+        priority_tag    TEXT DEFAULT 'Normal',
+        created_by      TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS ru_distributions (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        study_id        TEXT NOT NULL REFERENCES studies(id),
+        document_id     TEXT NOT NULL REFERENCES documents(id),
+        document_title  TEXT,
+        document_version TEXT DEFAULT '1.0',
+        deadline        TEXT,
+        status          TEXT DEFAULT 'Open',
+        created_by      TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS ru_acknowledgements (
+        id              TEXT PRIMARY KEY,
+        distribution_id TEXT NOT NULL REFERENCES ru_distributions(id),
+        tenant_id       TEXT NOT NULL,
+        user_id         TEXT NOT NULL REFERENCES users(id),
+        user_name       TEXT,
+        user_role       TEXT,
+        site_code       TEXT,
+        status          TEXT DEFAULT 'Pending', -- 'Pending', 'Acknowledged', 'Overdue'
+        acknowledged_at TEXT,
+        esig_id         TEXT,
+        ip_address      TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS inspector_access_grants (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        study_id        TEXT NOT NULL REFERENCES studies(id),
+        user_id         TEXT REFERENCES users(id),
+        inspector_name  TEXT NOT NULL,
+        inspector_email TEXT NOT NULL,
+        authority       TEXT NOT NULL, -- 'FDA', 'EMA', 'MHRA', 'BfArM', 'PMDA', 'Internal QA', 'Third-Party Auditor'
+        inspector_type  TEXT NOT NULL, -- 'Regulatory Inspector', 'Internal Auditor', 'Third-Party Auditor'
+        inspection_type TEXT DEFAULT 'Routine GCP',
+        nda_required    INTEGER DEFAULT 0,
+        nda_signed      INTEGER DEFAULT 0,
+        start_date      TEXT NOT NULL,
+        end_date        TEXT NOT NULL,
+        status          TEXT DEFAULT 'Active',
+        docs_viewed     INTEGER DEFAULT 0,
+        created_by      TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS saved_searches (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        user_id         TEXT NOT NULL REFERENCES users(id),
+        name            TEXT NOT NULL,
+        query_json      TEXT NOT NULL,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS document_applicability (
+        id              TEXT PRIMARY KEY,
+        tenant_id       TEXT NOT NULL,
+        document_id     TEXT NOT NULL REFERENCES documents(id),
+        study_id        TEXT NOT NULL,
+        country         TEXT,
+        site_id         TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+      );
+    `);
+
+    const tenantId = 'tenant-001';
+
+    // Ensure compatibility columns exist on all Phase 7 tables
+    addCol('tenant_setup_progress', 'step4_users', 'INTEGER DEFAULT 1');
+    addCol('tenant_setup_progress', 'step5_permissions', 'INTEGER DEFAULT 1');
+    addCol('tenant_setup_progress', 'completed_at', 'TEXT');
+
+    addCol('tenant_milestone_configs', 'level', "TEXT DEFAULT 'Study'");
+    addCol('tenant_milestone_configs', 'edl_items_count', 'INTEGER DEFAULT 15');
+    addCol('tenant_milestone_configs', 'is_ongoing', 'INTEGER DEFAULT 0');
+    addCol('tenant_milestone_configs', 'updated_at', 'TEXT');
+
+    addCol('edl_templates', 'base_model_version', "TEXT DEFAULT 'DIA v3.2'");
+    addCol('edl_templates', 'version', "TEXT DEFAULT 'v1.0'");
+    addCol('edl_templates', 'artifacts_json', "TEXT DEFAULT '[]'");
+
+    addCol('tmf_overlays', 'base_version', "TEXT DEFAULT 'DIA v3.2'");
+    addCol('tmf_overlays', 'version', "TEXT DEFAULT '1.0'");
+    addCol('tmf_overlays', 'custom_artifacts_json', "TEXT DEFAULT '[]'");
+    addCol('tmf_overlays', 'naming_aliases_json', "TEXT DEFAULT '{}'");
+    addCol('tmf_overlays', 'status', "TEXT DEFAULT 'Active'");
+
+    addCol('study_milestones', 'due_days', 'INTEGER DEFAULT 30');
+    addCol('study_milestones', 'edl_items_count', 'INTEGER DEFAULT 15');
+    addCol('study_milestones', 'triggered_at', 'TEXT');
+    addCol('study_milestones', 'triggered_by', 'TEXT');
+
+    addCol('study_user_assignments', 'study_role', "TEXT DEFAULT 'CRA'");
+    addCol('study_user_assignments', 'scope_type', "TEXT DEFAULT 'Site'");
+    addCol('study_user_assignments', 'scope_countries', "TEXT DEFAULT '[\"ALL\"]'");
+    addCol('study_user_assignments', 'scope_sites', "TEXT DEFAULT '[\"ALL\"]'");
+    addCol('study_user_assignments', 'created_at', "TEXT DEFAULT (datetime('now'))");
+
+    addCol('review_rules', 'scope_type', "TEXT DEFAULT 'Zone'");
+    addCol('review_rules', 'scope_target', "TEXT DEFAULT 'ALL'");
+    addCol('review_rules', 'scope_label', 'TEXT');
+    addCol('review_rules', 'priority', 'INTEGER DEFAULT 3');
+    addCol('review_rules', 'reviewer_role', "TEXT DEFAULT 'Reviewer'");
+    addCol('review_rules', 'approver_role', "TEXT DEFAULT 'Approver'");
+    addCol('review_rules', 'sla_days', 'INTEGER DEFAULT 5');
+
+    addCol('ru_distributions', 'title', 'TEXT');
+    addCol('ru_distributions', 'version', "TEXT DEFAULT '1.0'");
+    addCol('ru_distributions', 'reason', 'TEXT');
+    addCol('ru_distributions', 'target_roles', "TEXT DEFAULT '[]'");
+    addCol('ru_distributions', 'target_sites', "TEXT DEFAULT '[]'");
+    addCol('ru_distributions', 'deadline_date', 'TEXT');
+
+    addCol('ru_acknowledgements', 'signature_meaning', 'TEXT');
+    addCol('ru_acknowledgements', 'signature_hash', 'TEXT');
+
+    addCol('inspector_access_grants', 'agency', "TEXT DEFAULT 'EMA'");
+    addCol('inspector_access_grants', 'scope_zones', "TEXT DEFAULT '[\"ALL\"]'");
+    addCol('inspector_access_grants', 'scope_countries', "TEXT DEFAULT '[\"ALL\"]'");
+    addCol('inspector_access_grants', 'scope_sites', "TEXT DEFAULT '[\"ALL\"]'");
+    addCol('inspector_access_grants', 'valid_from', 'TEXT');
+    addCol('inspector_access_grants', 'valid_until', 'TEXT');
+    addCol('inspector_access_grants', 'nda_accepted_at', 'TEXT');
+
+    addCol('saved_searches', 'query_text', 'TEXT');
+    addCol('saved_searches', 'filters_json', "TEXT DEFAULT '{}'");
+    addCol('saved_searches', 'is_shared', 'INTEGER DEFAULT 0');
+
+    // Sync compatibility columns on seeded rows
+    db.exec(`
+      UPDATE tenant_setup_progress SET step4_users = COALESCE(step4_user_management, 1), step5_permissions = COALESCE(step5_role_permissions, 1);
+      UPDATE tenant_milestone_configs SET is_ongoing = CASE WHEN code = 'M11' THEN 1 ELSE 0 END;
+      UPDATE edl_templates SET artifacts_json = CASE WHEN artifacts_json IS NULL OR artifacts_json = '[]' THEN COALESCE(items_json, '[]') ELSE artifacts_json END, base_model_version = COALESCE(base_version, 'DIA v3.2'), version = COALESCE(version_number, '1.0');
+      UPDATE study_user_assignments SET study_role = COALESCE(role, 'CRA'), scope_countries = COALESCE(countries_json, '["ALL"]'), scope_sites = COALESCE(sites_json, '["ALL"]');
+      UPDATE review_rules SET scope_type = COALESCE(rule_level, 'Zone'), scope_target = COALESCE(trigger_code, '*'), scope_label = COALESCE(name, trigger_code), priority = COALESCE(priority_order, 3), sla_days = COALESCE(due_days, 14);
+      UPDATE ru_distributions SET title = COALESCE(document_title, 'Protocol Amendment v2.0'), version = COALESCE(document_version, '2.0'), deadline_date = COALESCE(deadline, date('now', '+14 days'));
+      UPDATE inspector_access_grants SET agency = COALESCE(authority, 'EMA'), valid_from = COALESCE(start_date, date('now')), valid_until = COALESCE(end_date, date('now', '+30 days'));
+    `);
+
+    // Seed baseline EDL placeholders for study-001 if none exist
+    const phCount = db.prepare('SELECT COUNT(*) as c FROM placeholders WHERE study_id = ?').get('study-001').c;
+    if (phCount === 0) {
+      const seedPhs = [
+        { code: '01.01.01', name: 'Trial Master File Plan', zone: '01', sec: '01.01', ms: 'M02', due: '2026-01-15' },
+        { code: '01.01.08', name: 'Monitoring Plan', zone: '01', sec: '01.01', ms: 'M02', due: '2026-01-20' },
+        { code: '02.01.02', name: 'Protocol', zone: '02', sec: '02.01', ms: 'M01', due: '2026-01-10' },
+        { code: '03.01.02', name: 'Regulatory Authority Decision', zone: '03', sec: '03.01', ms: 'M01', due: '2026-02-01' },
+        { code: '04.01.02', name: 'IRB or IEC Decision', zone: '04', sec: '04.01', ms: 'M03', due: '2026-02-10' },
+        { code: '05.02.04', name: 'Principal Investigator CV', zone: '05', sec: '05.02', ms: 'M03', due: '2026-02-15' },
+      ];
+      const insPh = db.prepare(`
+        INSERT OR IGNORE INTO placeholders (id, tenant_id, study_id, artifact_code, artifact_name, zone, section, mandatory, is_mandatory, milestone_code, due_status, due_date, expected_by, expected_by_date, escalation_stage)
+        VALUES (?, ?, 'study-001', ?, ?, ?, ?, 1, 1, ?, 'Due', ?, ?, ?, 'None')
+      `);
+      seedPhs.forEach((p, idx) => {
+        insPh.run(`ph-study-001-${idx + 1}`, tenantId, p.code, p.name, p.zone, p.sec, p.ms, p.due, p.due, p.due);
+      });
+    }
+
+    // 1. Seed tenant_setup_progress
+    db.prepare(`
+      INSERT OR IGNORE INTO tenant_setup_progress (
+        tenant_id, step1_tmf_model, step2_edl_template, step3_milestones, step4_user_management, step5_role_permissions, selected_tmf_model, selected_edl_template_id, updated_by
+      ) VALUES (?, 1, 1, 1, 1, 1, 'v3.2', 'edl-tpl-v32', 'system')
+    `).run(tenantId);
+
+    // 2. Seed M01-M12 tenant_milestone_configs (Ref 1 screen-milestones)
+    const msCount = db.prepare('SELECT COUNT(*) as c FROM tenant_milestone_configs WHERE tenant_id = ?').get(tenantId).c;
+    if (msCount === 0) {
+      const ref1Milestones = [
+        { code: 'M01', name: 'First Country RA Approval', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M02', name: 'Clinical Infrastructure Ready', study: 1, country: 1, site: 0, days: 30, type: 'One-time' },
+        { code: 'M03', name: 'Site Live / Open for Enrollment', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M04', name: 'First Monitoring Visit', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M05', name: 'Significant Study Event', study: 1, country: 1, site: 1, days: 30, type: 'Next Phase' },
+        { code: 'M06', name: 'Annual IRB / IEC Renewal', study: 0, country: 1, site: 1, days: 14, type: 'Next Phase' },
+        { code: 'M07', name: 'Last Subject Last Visit', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M08', name: 'Database Lock', study: 1, country: 0, site: 0, days: 30, type: 'One-time' },
+        { code: 'M09', name: 'Close Out / Site Closed', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M10', name: 'Final Report / CSR Approved', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+        { code: 'M11', name: 'Ongoing', study: 1, country: 1, site: 1, days: 0,  type: 'Always Active' },
+        { code: 'M12', name: 'TMF Closure / Lock', study: 1, country: 1, site: 1, days: 30, type: 'One-time' },
+      ];
+      const insMs = db.prepare(`
+        INSERT OR IGNORE INTO tenant_milestone_configs (id, tenant_id, code, name, study_level, country_level, site_level, due_days, milestone_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      ref1Milestones.forEach(m => {
+        insMs.run(`tmc-${tenantId}-${m.code}`, tenantId, m.code, m.name, m.study, m.country, m.site, m.days, m.type);
+      });
+    }
+
+    // 3. Seed Default & Custom EDL Templates (Ref 1 screen-edl-template)
+    const tplCount = db.prepare('SELECT COUNT(*) as c FROM edl_templates WHERE tenant_id = ?').get(tenantId).c;
+    if (tplCount === 0) {
+      const sampleItems = [
+        { artifact_code: '01.01.01', artifact_name: 'Trial Master File Plan', zone: '01', section: '01.01', level: 'Study', mandatory: 'Core/Mandatory', milestone: 'M02' },
+        { artifact_code: '01.01.08', artifact_name: 'Monitoring Plan', zone: '01', section: '01.01', level: 'Study', mandatory: 'Core/Mandatory', milestone: 'M02' },
+        { artifact_code: '01.01.16', artifact_name: 'Risk Management Plan', zone: '01', section: '01.01', level: 'Study', mandatory: 'Core/Mandatory', milestone: 'M02' },
+        { artifact_code: '02.01.02', artifact_name: 'Protocol', zone: '02', section: '02.01', level: 'Study', mandatory: 'Core/Mandatory', milestone: 'M01' },
+        { artifact_code: '03.01.02', artifact_name: 'Regulatory Authority Decision', zone: '03', section: '03.01', level: 'Country', mandatory: 'Core/Mandatory', milestone: 'M01' },
+        { artifact_code: '04.01.02', artifact_name: 'IRB or IEC Decision', zone: '04', section: '04.01', level: 'Site', mandatory: 'Core/Mandatory', milestone: 'M03' },
+        { artifact_code: '05.02.04', artifact_name: 'Principal Investigator CV', zone: '05', section: '05.02', level: 'Site', mandatory: 'Core/Mandatory', milestone: 'M03' },
+        { artifact_code: '05.04.03', artifact_name: 'Monitoring Visit Report', zone: '05', section: '05.04', level: 'Site', mandatory: 'Core/Mandatory', milestone: 'M04' },
+        { artifact_code: '07.02.02', artifact_name: 'SAE Report', zone: '07', section: '07.02', level: 'Study', mandatory: 'Core/Mandatory', milestone: 'M11' },
+      ];
+      const phase1Items = sampleItems.map(item => {
+        if (item.artifact_code === '01.01.16') return { ...item, mandatory: 'Optional' };
+        if (item.artifact_code === '05.02.04') return { ...item, mandatory: 'Optional' };
+        if (item.artifact_code === '01.01.08') return { ...item, milestone: 'M03' };
+        return item;
+      });
+
+      const insTpl = db.prepare(`
+        INSERT OR IGNORE INTO edl_templates (
+          id, tenant_id, name, description, base_version, version_number, status, is_default, is_locked, study_count, country_count, site_count, optional_excluded, items_json, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      insTpl.run('edl-tpl-v30', tenantId, 'Default EDL Template — v3.0', 'Auto-created from DIA TMF Reference Model v3.0', 'v3.0', '1.0', 'Default', 1, 1, 156, 100, 95, 106, JSON.stringify(sampleItems), 'Platform Vendor');
+      insTpl.run('edl-tpl-v32', tenantId, 'Default EDL Template — v3.2', 'Auto-created from DIA TMF Reference Model v3.2', 'v3.2', '1.0', 'Default', 1, 1, 156, 100, 95, 106, JSON.stringify(sampleItems), 'Platform Vendor');
+      insTpl.run('edl-tpl-phase3', tenantId, 'AcmePharma Phase 3 Template', 'Standard template for Phase 3 oncology trials', 'v3.2', '1.0', 'Published', 0, 1, 156, 100, 95, 106, JSON.stringify(sampleItems), 'James Wright');
+      insTpl.run('edl-tpl-phase1', tenantId, 'AcmePharma Phase 1 Template', 'Early phase template with streamlined optional set', 'v3.2', '1.1', 'Draft', 0, 0, 120, 80, 70, 187, JSON.stringify(phase1Items), 'James Wright');
+    }
+
+    // 4. Seed DIA TMF Reference Model v3.0 & v3.2 templates into trial_templates / dia_model_items
+    const diaTplCount = db.prepare('SELECT COUNT(*) as c FROM trial_templates WHERE tenant_id = ?').get(tenantId).c;
+    if (diaTplCount === 0) {
+      db.prepare(`INSERT OR IGNORE INTO trial_templates (id, tenant_id, name, description, version, is_active, created_by) VALUES ('tmf-model-v30', ?, 'DIA TMF Reference Model v3.0', '11 Zones · 42 Sections · 200 Artifacts · 410 Doc Types', '3.0', 1, 'Platform Vendor')`).run(tenantId);
+      db.prepare(`INSERT OR IGNORE INTO trial_templates (id, tenant_id, name, description, version, is_active, created_by) VALUES ('tmf-model-v32', ?, 'DIA TMF Reference Model v3.2', '11 Zones · 48 Sections · 250 Artifacts · 533 Doc Types', '3.2.1', 1, 'Platform Vendor')`).run(tenantId);
+    }
+
+    // 5. Seed study_milestones for study-001 (Ref 3 v-milestones)
+    const smCount = db.prepare('SELECT COUNT(*) as c FROM study_milestones WHERE study_id = ?').get('study-001').c;
+    if (smCount === 0) {
+      const studyMs = [
+        { code: 'M01', name: 'First Country RA Approval', level: 'Country', planned: '2026-01-15', actual: '2026-01-10', status: 'done', edl: 45 },
+        { code: 'M02', name: 'Clinical Infrastructure Ready', level: 'Study', planned: '2026-02-01', actual: '2026-01-28', status: 'done', edl: 45 },
+        { code: 'M03', name: 'Site Live / Open for Enrollment', level: 'Site', planned: '2026-03-15', actual: '2026-02-25', status: 'done', edl: 22 },
+        { code: 'M04', name: 'First Monitoring Visit', level: 'Site', planned: '2026-04-15', actual: null, status: 'active', edl: 18 },
+        { code: 'M05', name: 'Significant Study Event', level: 'Study', planned: null, actual: null, status: 'pending', edl: 12 },
+        { code: 'M06', name: 'Annual IRB / IEC Renewal', level: 'Site', planned: '2027-04-01', actual: null, status: 'pending', edl: 8 },
+        { code: 'M07', name: 'Last Subject Last Visit', level: 'Study', planned: '2027-12-31', actual: null, status: 'pending', edl: 24 },
+        { code: 'M08', name: 'Database Lock', level: 'Study', planned: '2028-02-28', actual: null, status: 'pending', edl: 15 },
+        { code: 'M09', name: 'Close Out Monitoring Visit', level: 'Site', planned: '2028-02-28', actual: null, status: 'pending', edl: 10 },
+        { code: 'M10', name: 'Final Report / CSR Approved', level: 'Study', planned: '2028-12-31', actual: null, status: 'pending', edl: 20 },
+        { code: 'M11', name: 'Ongoing — Always Active', level: 'Study', planned: null, actual: 'Always', status: 'always', edl: 106 },
+        { code: 'M12', name: 'TMF Closure / Lock', level: 'Study', planned: '2029-06-30', actual: null, status: 'pending', edl: 5 },
+      ];
+      const insSm = db.prepare(`
+        INSERT OR IGNORE INTO study_milestones (id, tenant_id, study_id, code, name, level, planned_date, actual_date, status, edl_triggered_count)
+        VALUES (?, ?, 'study-001', ?, ?, ?, ?, ?, ?, ?)
+      `);
+      studyMs.forEach(m => {
+        insSm.run(`sm-study-001-${m.code}`, tenantId, m.code, m.name, m.level, m.planned, m.actual, m.status, m.edl);
+      });
+    }
+
+    // 6. Seed study_user_assignments & review_rules for study-001 (Ref 3 Steps 6 & 7)
+    const suaCount = db.prepare('SELECT COUNT(*) as c FROM study_user_assignments WHERE study_id = ?').get('study-001').c;
+    if (suaCount === 0) {
+      const insSua = db.prepare(`
+        INSERT OR IGNORE INTO study_user_assignments (id, tenant_id, study_id, user_id, role, countries_json, sites_json, scope_label, assigned_by)
+        VALUES (?, ?, 'study-001', ?, ?, ?, ?, ?, 'usr-001')
+      `);
+      insSua.run('sua-001', tenantId, 'usr-001', 'TMF Manager', '["Germany","UK","USA","India"]', '["Site-001","Site-002","Site-003","Site-004"]', 'All Countries + All Sites (auto)');
+      insSua.run('sua-002', tenantId, 'usr-002', 'Principal Investigator', '["Germany"]', '["Site-001"]', 'Germany · Site-001');
+      insSua.run('sua-003', tenantId, 'usr-003', 'CRA / Reviewer', '["Germany","UK"]', '["Site-001","Site-002"]', 'Site-001, Site-002');
+      insSua.run('sua-004', tenantId, 'usr-004', 'Regulatory Approver', '["Germany","UK","USA","India"]', '["Site-001","Site-002","Site-003","Site-004"]', 'All Sites (read + e-sign)');
+      insSua.run('sua-005', tenantId, 'usr-005', 'Data Manager / Author', '["USA"]', '["Site-003"]', 'USA · Site-003');
+    }
+
+    const rrCount = db.prepare('SELECT COUNT(*) as c FROM review_rules WHERE study_id = ?').get('study-001').c;
+    if (rrCount === 0) {
+      const insRr = db.prepare(`
+        INSERT OR IGNORE INTO review_rules (id, tenant_id, study_id, name, rule_level, priority_order, trigger_code, repository_scope, workflow_type, reviewer_id, reviewer_name, approver_id, approver_name, due_days, priority_tag, created_by)
+        VALUES (?, ?, 'study-001', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'usr-001')
+      `);
+      insRr.run('rr-001', tenantId, 'Rule 13C — Artifact Level', 'Artifact', 1, '05.03.07', 'All Sites', 'Two-Step', 'usr-003', 'Marcus Williams', 'usr-004', 'Priya Sharma', 7, 'High');
+      insRr.run('rr-002', tenantId, 'Rule Z7 — Zone Level', 'Zone', 2, '07', 'All Sites', 'Two-Step Urgent', 'usr-003', 'Marcus Williams', 'usr-004', 'Priya Sharma', 2, 'Urgent');
+      insRr.run('rr-003', tenantId, 'Rule ALL — Study Level', 'Study', 3, '*', 'All Sites', 'Two-Step', 'usr-003', 'Marcus Williams', 'usr-004', 'Priya Sharma', 14, 'Normal');
+      insRr.run('rr-004', tenantId, 'Catch-All Fallback', 'Catch-all', 4, '*', 'All Sites', 'Two-Step', 'usr-003', 'Marcus Williams (fallback)', 'usr-004', 'Priya Sharma', 14, 'Normal');
+    }
+
+    // 7. Seed sample R&U Distribution and Inspector Access Grant for study-001 (Ref 3 Steps 13 & 19)
+    const ruCount = db.prepare('SELECT COUNT(*) as c FROM ru_distributions WHERE study_id = ?').get('study-001').c;
+    if (ruCount === 0) {
+      db.prepare(`
+        INSERT OR IGNORE INTO ru_distributions (id, tenant_id, study_id, document_id, document_title, document_version, deadline, status, created_by)
+        VALUES ('ru-dist-001', ?, 'study-001', 'doc-001', 'Protocol and Amendments v2.0', '2.0', date('now', '+14 days'), 'Open', 'usr-001')
+      `).run(tenantId);
+      db.prepare(`
+        INSERT OR IGNORE INTO ru_acknowledgements (id, distribution_id, tenant_id, user_id, user_name, user_role, site_code, status, acknowledged_at)
+        VALUES
+          ('ru-ack-001', 'ru-dist-001', ?, 'usr-002', 'Dr. Sarah Chen', 'Principal Investigator', 'Site-001', 'Acknowledged', datetime('now', '-1 day')),
+          ('ru-ack-002', 'ru-dist-001', ?, 'usr-003', 'Marcus Williams', 'CRA / Reviewer', 'Site-002', 'Pending', NULL)
+      `).run(tenantId, tenantId);
+    }
+
+    const inspCount = db.prepare('SELECT COUNT(*) as c FROM inspector_access_grants WHERE study_id = ?').get('study-001').c;
+    if (inspCount === 0) {
+      db.prepare(`
+        INSERT OR IGNORE INTO inspector_access_grants (
+          id, tenant_id, study_id, user_id, inspector_name, inspector_email, authority, inspector_type, inspection_type, nda_required, nda_signed, start_date, end_date, status, docs_viewed, created_by
+        ) VALUES (
+          'insp-grant-001', ?, 'study-001', 'usr-007', 'Tom Eriksen', 't.eriksen@ema.europa.eu', 'EMA', 'Regulatory Inspector', 'Routine GCP', 0, 1, date('now', '-5 days'), date('now', '+30 days'), 'Active', 147, 'usr-001'
+        )
+      `).run(tenantId);
+    }
+
+    // Sync compatibility columns after initial seed so both schema variants are always populated
+    db.exec(`
+      UPDATE tenant_setup_progress SET step4_users = COALESCE(step4_user_management, 1), step5_permissions = COALESCE(step5_role_permissions, 1);
+      UPDATE tenant_milestone_configs SET is_ongoing = CASE WHEN code = 'M11' THEN 1 ELSE 0 END;
+      UPDATE edl_templates SET artifacts_json = CASE WHEN artifacts_json IS NULL OR artifacts_json = '[]' THEN COALESCE(items_json, '[]') ELSE artifacts_json END, base_model_version = COALESCE(base_version, 'DIA v3.2'), version = COALESCE(version_number, '1.0');
+      UPDATE study_user_assignments SET study_role = COALESCE(role, 'CRA'), scope_countries = COALESCE(countries_json, '["ALL"]'), scope_sites = COALESCE(sites_json, '["ALL"]');
+      UPDATE review_rules SET scope_type = COALESCE(rule_level, 'Zone'), scope_target = COALESCE(trigger_code, '*'), scope_label = COALESCE(name, trigger_code), priority = COALESCE(priority_order, 3), sla_days = COALESCE(due_days, 14);
+      UPDATE ru_distributions SET title = COALESCE(document_title, 'Protocol Amendment v2.0'), version = COALESCE(document_version, '2.0'), deadline_date = COALESCE(deadline, date('now', '+14 days'));
+      UPDATE inspector_access_grants SET agency = COALESCE(authority, 'EMA'), valid_from = COALESCE(start_date, date('now')), valid_until = COALESCE(end_date, date('now', '+30 days'));
+    `);
+  } catch (e) {
+    console.error('Error seeding Phase 7 data:', e.message);
   }
 }
 

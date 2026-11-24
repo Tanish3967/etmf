@@ -60,6 +60,11 @@ async function run() {
     db.prepare("DELETE FROM sessions WHERE user_id LIKE 'usr-p1-%'").run();
     db.prepare("DELETE FROM users WHERE id LIKE 'usr-p1-%'").run();
     db.prepare("UPDATE documents SET status = 'Draft', title = 'Statistical Analysis Plan v1.0' WHERE id = 'doc-005'").run();
+    db.prepare("DELETE FROM study_milestones WHERE study_id IN (SELECT id FROM studies WHERE protocol_number = 'TEST-2025-099')").run();
+    db.prepare("DELETE FROM study_user_assignments WHERE study_id IN (SELECT id FROM studies WHERE protocol_number = 'TEST-2025-099')").run();
+    db.prepare("DELETE FROM review_rules WHERE study_id IN (SELECT id FROM studies WHERE protocol_number = 'TEST-2025-099')").run();
+    db.prepare("DELETE FROM placeholders WHERE study_id IN (SELECT id FROM studies WHERE protocol_number = 'TEST-2025-099')").run();
+    db.prepare("DELETE FROM sites WHERE study_id IN (SELECT id FROM studies WHERE protocol_number = 'TEST-2025-099')").run();
     db.prepare("DELETE FROM studies WHERE protocol_number = 'TEST-2025-099'").run();
     db.prepare("UPDATE users SET failed_attempts = 0, locked_until = NULL").run();
   } catch (e) {

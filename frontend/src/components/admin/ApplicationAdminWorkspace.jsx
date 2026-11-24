@@ -125,20 +125,41 @@ export default function ApplicationAdminWorkspace({ onOpenStudyWizard }) {
   };
 
   const handleLockStudy = async (study) => {
-    if (!window.confirm(`Regulatory Lock Action: Are you sure you want to lock study "${study.protocol_number}" per 21 CFR Part 11 requirements? Locked studies cannot receive modifications.`)) return;
+    const confirmWord = window.prompt(`21 CFR Part 11 Irreversible Study Lock (Ref 3 Step 17):\nType LOCK to confirm locking study "${study.protocol_number}":`, 'LOCK');
+    if (confirmWord !== 'LOCK') {
+      showNotification('Study Lock cancelled: you must type LOCK to confirm.', true);
+      return;
+    }
+    const reason = window.prompt(`Enter regulatory justification for locking study "${study.protocol_number}":`, 'All milestones complete, 100% EDL verified, 0 open QIs');
+    if (!reason) return;
     try {
-      await api.post(`/studies/${study.id}/lock`, { force: true });
-      showNotification(`Study "${study.protocol_number}" has been locked.`);
+      await api.post(`/studies/${study.id}/lock`, { reason });
+      showNotification(`Study "${study.protocol_number}" has been locked after pre-lock verification.`);
       fetchStudies();
     } catch (err) {
-      showNotification(err.response?.data?.error || 'Failed to lock study', true);
+      const msg = err.response?.data?.error || 'Pre-lock verification failed';
+      if (window.confirm(`Pre-Lock Gate Alert: ${msg}\n\nDo you wish to force-override the pre-lock gate as System/TMF Administrator?`)) {
+        try {
+          await api.post(`/studies/${study.id}/lock`, { force: true, reason: `${reason} (Admin Override)` });
+          showNotification(`Study "${study.protocol_number}" locked with administrative override.`);
+          fetchStudies();
+        } catch (err2) {
+          showNotification(err2.response?.data?.error || 'Failed to lock study', true);
+        }
+      } else {
+        showNotification(msg, true);
+      }
     }
   };
 
   const handleUnlockStudy = async (study) => {
-    if (!window.confirm(`Regulatory Unlock Action: Unlock study "${study.protocol_number}"? This will re-enable active filings and site operations.`)) return;
+    const reason = window.prompt(`Regulatory Unlock Action (Ref 2 URS-047.2): Enter mandatory multi-level authorisation justification to unlock study "${study.protocol_number}":`, 'Emergency post-lock regulatory filing amendment');
+    if (!reason || !reason.trim()) {
+      showNotification('Justification reason is required to unlock a study.', true);
+      return;
+    }
     try {
-      await api.post(`/studies/${study.id}/unlock`);
+      await api.post(`/studies/${study.id}/unlock`, { reason });
       showNotification(`Study "${study.protocol_number}" has been unlocked.`);
       fetchStudies();
     } catch (err) {
