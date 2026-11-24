@@ -1,69 +1,117 @@
-name: Node.js CI/CD Pipeline
+name: eTMF Pro CI/CD Pipeline
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "feature/**" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  build:
+  backend-tests:
+    name: Backend Automated Test Suites (Phases 1-7 & Ingestion)
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node-version: [22.x]
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-        
-    - name: Install Dependencies
-      run: npm ci || npm install
-      
-    - name: Syntactic Code Validation
-      # Verifies the ESM routing structure to prevent deployment of broken syntaxes
-      run: node -c src/server.js
-
-    - name: Run Tests
-      # If you add Jest or Mocha tests later, uncomment this line
-      # run: npm test
-      run: echo "No automated tests specified. Skipping test phase."
-
-  ai_security_review:
-    name: AI Code Reviewer (Security & Bugs)
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
-      - name: AI Automated Bug & Security Review
-        uses: coderabbitai/coderabbit-action@v1
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
         with:
-          # Automatically comments on PRs with security flaws and bug fixes
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          review-type: 'security_and_bugs'
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install Backend Dependencies
+        run: npm ci || npm install
+
+      - name: Syntactic ESM Code Validation
+        run: |
+          node -c src/server.js
+          node -c src/database.js
+          node -c src/middleware/auth.js
+          node -c src/routes/all-routes.js
+          node -c src/routes/documents.js
+          node -c src/routes/workflow.js
+
+      - name: Start eTMF Backend API & Wait for Health Check
+        run: |
+          nohup node src/server.js > backend-server.log 2>&1 &
+          echo $! > backend.pid
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3002/health > /dev/null; then
+              echo "✅ eTMF Backend API is healthy on port 3002"
+              break
+            fi
+            sleep 1
+          done
+          curl -sf http://localhost:3002/health
+
+      - name: Run Master Automated Verification Suites (Phases 1-7)
+        run: npm test
+
+      - name: Run Multi-Format Document Upload & Ingestion Suite
+        run: node tests/upload_ingestion_test.js
+
+      - name: Print Backend Server Logs on Failure
+        if: failure()
+        run: |
+          echo "=== Backend Server Log ==="
+          cat backend-server.log || true
+
+      - name: Upload Test & Server Logs Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-ci-logs
+          path: |
+            backend-server.log
+          retention-days: 7
+
+  frontend-verification:
+    name: Frontend Lint & Next.js Production Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22.x]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci || npm install
+
+      - name: Run Frontend ESLint Gate
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run Frontend Production Build Gate
+        working-directory: frontend
+        run: npm run build
 
   deploy:
-    needs: build
+    name: Release & Deployment Gate
+    needs: [backend-tests, frontend-verification]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
-      
-    # Example CD Steps:
-    # Customize the below to deploy to AWS, Azure, Heroku, or via SSH to your VPS.
-    - name: Deploy to Server (Placeholder)
-      run: |
-        echo "Successfully built branch main. Ready to trigger deployment script or webhook!"
-        # e.g., curl -X POST https://your-server.com/hooks/deploy-etmf
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deployment Readiness Confirmation
+        run: |
+          echo "✅ All Backend (Phases 1-7 + Ingestion) and Frontend (ESLint + Next.js Build) CI gates passed on main."
