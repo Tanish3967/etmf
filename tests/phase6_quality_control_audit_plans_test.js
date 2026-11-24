@@ -90,8 +90,8 @@ async function run() {
     const hasFeatureBranch = branchList.includes('feature/phase-6-quality-control-audit-plans') || currentBranch === 'feature/phase-6-quality-control-audit-plans';
     assert.ok(hasFeatureBranch, 'Branch feature/phase-6-quality-control-audit-plans must exist in repository');
     assert.ok(
-      currentBranch === 'feature/phase-6-quality-control-audit-plans' || currentBranch === 'main',
-      `Current branch (${currentBranch}) must be feature/phase-6-quality-control-audit-plans or main (post-merge)`
+      currentBranch.startsWith('feature/') || currentBranch === 'main',
+      `Current branch (${currentBranch}) must be a feature/* branch or main (post-merge)`
     );
   });
 

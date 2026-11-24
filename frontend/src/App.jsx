@@ -38,6 +38,8 @@ import StudySetupWizardModal from './components/admin/StudySetupWizardModal';
 import ReportsWorkspace from './components/reports/ReportsWorkspace';
 import SystemAdminWorkspace from './components/admin/SystemAdminWorkspace';
 import EnterpriseAdminWorkspace from './components/admin/EnterpriseAdminWorkspace';
+import TmfManagerWorkspace from './components/admin/TmfManagerWorkspace';
+import AIGovernance from './pages/AIGovernance';
 import useIdleTimer from './hooks/useIdleTimer';
 
 export default function App() {
@@ -105,11 +107,12 @@ export default function App() {
 
   const fetchDocs = useCallback(() => {
     if (user && activeMenu === "Repository") {
-      api.get("/documents")
+      const url = isInspectorMode ? "/documents?inspectorMode=true" : "/documents";
+      api.get(url)
         .then(res => setDocs(res.data.documents || []))
         .catch(err => console.error("Error fetching documents:", err));
     }
-  }, [user, activeMenu]);
+  }, [user, activeMenu, isInspectorMode]);
 
   const handleLogin = (u, token) => {
     setSessionExpiredNotice(null);
@@ -365,8 +368,9 @@ export default function App() {
   if (!user) return <LoginScreen onLogin={handleLogin} sessionExpiredNotice={sessionExpiredNotice} />;
 
   const MENU_ITEMS = [
-    { id: "Repository", icon: "📁" }, { id: "My Tasks", icon: "✅" }, { id: "Quality Control", icon: "🔍" },
-    { id: "Forms/Logs", icon: "📝" }, { id: "Reports", icon: "📊" }, { id: "Security Administration", icon: "🛡️" },
+    { id: "Repository", icon: "📁" }, { id: "My Tasks", icon: "✅" }, { id: "TMF Manager Console", icon: "🎯" },
+    { id: "Quality Control", icon: "🔍" }, { id: "Forms/Logs", icon: "📝" }, { id: "Reports", icon: "📊" },
+    { id: "AI Governance", icon: "🧠" }, { id: "Security Administration", icon: "🛡️" },
     { id: "Application Administration", icon: "⚙️" }, { id: "System Administration", icon: "💻" }, { id: "Manage Enterprise", icon: "🏢" }
   ];
 
@@ -553,6 +557,10 @@ export default function App() {
                 />
               ) : activeMenu === "Quality Control" ? (
                 <QualityControlCenter />
+              ) : activeMenu === "TMF Manager Console" ? (
+                <TmfManagerWorkspace />
+              ) : activeMenu === "AI Governance" ? (
+                <AIGovernance />
               ) : activeMenu === "Security Administration" ? (
                 <SecurityAdminWorkspace />
               ) : activeMenu === "Application Administration" ? (

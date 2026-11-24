@@ -9,30 +9,35 @@ import { v4 as uuid } from 'uuid';
 import crypto from 'crypto';
 import fs from 'fs';
 import { getDB, appendAudit } from '../database.js';
-import { requireAuth, blockInspector } from '../middleware/auth.js';
+import { requireAuth, blockInspector, requireUnlockedStudy } from '../middleware/auth.js';
 
 const router = Router();
 router.use(requireAuth);
 
-// Full 15-state Clinical Workflow State Machine (Clinevo eTMF 4.3 §8.11–§8.13)
+// Full Clinical Workflow State Machine (Clinevo eTMF 4.3 §8.11–§8.13 + Ref 2 SRS §12.1)
 export const WF_TRANSITIONS = {
-  'Draft':               ['Pending Review', 'Under Review', 'Pending Approval', 'Published'],
-  'Pending Review':      ['Under Review', 'Review Complete', 'More Info Requested', 'Review Rejected', 'Rejected'],
-  'Under Review':        ['Review Complete', 'More Info Requested', 'Review Rejected', 'Rejected'],
-  'More Info Requested': ['Pending Review', 'Under Review', 'Draft'],
+  'Draft':               ['Pending Review', 'Under Review', 'Pending Approval', 'Published', 'On Hold', 'Obsolete'],
+  'Pending Review':      ['Under Review', 'Review Complete', 'More Info Requested', 'Review Rejected', 'Rejected', 'On Hold'],
+  'Under Review':        ['Review Complete', 'More Info Requested', 'Review Rejected', 'Rejected', 'On Hold'],
+  'More Info Requested': ['Pending Review', 'Under Review', 'Draft', 'On Hold'],
   'Review Rejected':     ['Draft', 'Pending Review'],
-  'Review Complete':     ['Pending Approval', 'Pending Signoff', 'Pending Publish', 'Published'],
-  'Pending Approval':    ['Approved', 'Approve Rejected', 'Rejected', 'More Info Requested'],
+  'Review Complete':     ['Pending Approval', 'Pending Signoff', 'Pending Publish', 'Published', 'On Hold'],
+  'Pending Approval':    ['Approved', 'Approve Rejected', 'Rejected', 'More Info Requested', 'On Hold'],
   'Approve Rejected':    ['Draft', 'Pending Review', 'Pending Approval'],
   'Rejected':            ['Draft', 'Pending Review'],
-  'Approved':            ['Pending Signoff', 'Signed Off', 'Pending Publish', 'Published', 'Superseded', 'Unpublish'],
+  'Approved':            ['Effective', 'Pending Signoff', 'Signed Off', 'Pending Publish', 'Published', 'Superseded', 'Expired', 'Unpublish', 'Archived', 'Obsolete'],
+  'Effective':           ['Superseded', 'Expired', 'Archived', 'Obsolete'],
+  'Expired':             ['Draft', 'Pending Review', 'Superseded', 'Obsolete'],
+  'On Hold':             ['Draft', 'Pending Review', 'Under Review', 'Pending Approval'],
   'Pending Signoff':     ['Signed Off', 'Signoff Rejected', 'Rejected'],
   'Signoff Rejected':    ['Pending Approval', 'Draft'],
-  'Signed Off':          ['Pending Publish', 'Published', 'Superseded'],
-  'Pending Publish':     ['Published', 'Approved'],
-  'Published':           ['Unpublish', 'Superseded'],
+  'Signed Off':          ['Pending Publish', 'Published', 'Effective', 'Superseded'],
+  'Pending Publish':     ['Published', 'Effective', 'Approved'],
+  'Published':           ['Effective', 'Unpublish', 'Superseded', 'Expired', 'Archived'],
   'Unpublish':           ['Draft', 'Pending Publish', 'Published'],
-  'Superseded':          ['Draft'],
+  'Superseded':          ['Draft', 'Archived'],
+  'Archived':            [],
+  'Obsolete':            [],
 };
 
 // Configurable Workflow Archetypes (§8.5.2.9)
@@ -87,9 +92,10 @@ router.get('/states', (req, res) => {
 });
 
 // ── POST /api/workflow/:docId/transition ─────────────────────
-router.post('/:docId/transition', blockInspector, async (req, res) => {
+router.post('/:docId/transition', blockInspector, requireUnlockedStudy, async (req, res) => {
   const db = getDB();
-  const { nextState, comment, credentials, workflowType } = req.body;
+  const { nextState: rawNextState, toState, comment, credentials, workflowType } = req.body;
+  const nextState = rawNextState || toState;
 
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.docId, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
@@ -102,10 +108,10 @@ router.post('/:docId/transition', blockInspector, async (req, res) => {
     return res.status(400).json({ error: `Invalid transition: ${doc.status} → ${nextState}. Allowed: ${allowed.join(', ')}` });
   }
 
-  // Segregation of Duties (SoD) enforcement (§8.5.2.9 & 21 CFR Part 11):
-  // The document author cannot review, approve, or sign off their own document
+  // Segregation of Duties (SoD) enforcement (§8.5.2.9, Ref 2 §12.3 & 21 CFR Part 11):
+  // The document author cannot review, approve, or sign off their own document (C-01: no bypassSoD backdoor allowed)
   const sodRestrictedStates = ['Review Complete', 'Approved', 'Signed Off'];
-  if (sodRestrictedStates.includes(nextState) && req.body.bypassSoD !== true) {
+  if (sodRestrictedStates.includes(nextState)) {
     if (doc.author_id && doc.author_id === req.user.id) {
       return res.status(403).json({
         error: `Segregation of Duties (SoD) violation: Document author (${req.user.name}) cannot transition their own document to '${nextState}'. An independent reviewer/approver is required.`,
@@ -356,12 +362,11 @@ router.get('/tasks', (req, res) => {
     pendingPublish: withSLA.filter(t => ['Signed Off', 'Pending Publish'].includes(t.status)).length,
   };
 
-  // Expiring documents
+  // Expiring and already-expired documents (C-08 / Ref 3 Step 14: include days_left <= 0 Critical Expired + 14/30/60/90d)
   const expiring = db.prepare(`
     SELECT d.*, CAST(julianday(d.expiry_date) - julianday('now') AS INTEGER) as days_left
     FROM documents d WHERE d.tenant_id = ? AND d.active = 1 AND d.expiry_date IS NOT NULL
     AND julianday(d.expiry_date) - julianday('now') <= 90
-    AND julianday(d.expiry_date) - julianday('now') > 0
     ORDER BY d.expiry_date ASC
   `).all(req.tenantId);
 
@@ -405,5 +410,35 @@ const slaDashboardHandler = (req, res) => {
 
 router.get('/sla', slaDashboardHandler);
 router.get('/sla-dashboard', slaDashboardHandler);
+
+// C-08 / Ref 3 Step 14: Notify CRA of Expiring or Expired Document
+router.post('/expiry/:docId/notify-cra', blockInspector, (req, res) => {
+  const db = getDB();
+  const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.docId, req.tenantId);
+  if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+  const targetUserId = doc.author_id || doc.created_by || 'usr-002';
+  const daysLeft = doc.expiry_date ? Math.round((new Date(doc.expiry_date) - new Date()) / 86400000) : 0;
+  const urgency = daysLeft <= 0 ? 'CRITICAL EXPIRED' : (daysLeft <= 14 ? 'URGENT (<=14d)' : 'WARNING');
+
+  db.prepare("INSERT INTO notifications (id, tenant_id, user_id, type, title, body, priority, created_at) VALUES (?,?,?,?,?,?,?,datetime('now'))")
+    .run(uuid(), req.tenantId, targetUserId, 'expiry', `[${urgency}] Renewal Required: ${doc.title}`, `Document ${doc.artifact_code} (${doc.title}) expiry date is ${doc.expiry_date} (${daysLeft} days remaining). Please upload renewed version immediately.`, daysLeft <= 14 ? 'high' : 'medium');
+
+  appendAudit({
+    tenantId: req.tenantId,
+    studyId: doc.study_id,
+    documentId: doc.id,
+    userId: req.user.id,
+    userName: req.user.name,
+    action: 'Expiry Alert Sent to CRA',
+    objectType: 'document',
+    objectId: doc.id,
+    objectName: doc.title,
+    detail: `[${urgency}] Notified user ${targetUserId} (${daysLeft}d left)`,
+    ip: req.ip
+  });
+
+  res.json({ message: `Urgent expiry renewal alert sent to CRA (${urgency})`, documentId: doc.id, notifiedUserId: targetUserId, daysLeft });
+});
 
 export default router;

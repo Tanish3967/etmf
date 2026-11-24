@@ -8,15 +8,39 @@ import { getDB } from '../database.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'etmf-dev-secret-change-in-production';
 
-// Role capability map
+// Role capability map (Ref 1 screen-permissions + backward-compatible role aliases)
 export const ROLE_CAPS = {
-  'TMF Manager':            { canView:'all', canUpload:true,  canReview:true,  canApprove:true,  canAdmin:true,  canLock:true  },
-  'Principal Investigator': { canView:'all', canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false },
-  'CRA / Reviewer':         { canView:'all', canUpload:false, canReview:true,  canApprove:false, canAdmin:false, canLock:false },
-  'Regulatory Approver':    { canView:'all', canUpload:false, canReview:false, canApprove:true,  canAdmin:false, canLock:false },
-  'Data Manager / Author':  { canView:'scoped', canUpload:true, canReview:false, canApprove:false, canAdmin:false, canLock:false },
-  'System Administrator':   { canView:'all', canUpload:true,  canReview:true,  canApprove:true,  canAdmin:true,  canLock:true  },
-  'Inspector / Auditor':    { canView:'all', canUpload:false, canReview:false, canApprove:false, canAdmin:false, canLock:false },
+  'TMF Manager':            { canView:'all',    canUpload:true,  canReview:true,  canApprove:true,  canAdmin:true,  canLock:true,  canExport:true,  canSetMilestones:true,  canCreateStudy:true  },
+  'Principal Investigator': { canView:'all',    canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'CRA / Reviewer':         { canView:'all',    canUpload:false, canReview:true,  canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'CRA':                    { canView:'all',    canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'CRA / Author':           { canView:'all',    canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'Reviewer':               { canView:'all',    canUpload:false, canReview:true,  canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'Approver':               { canView:'all',    canUpload:false, canReview:false, canApprove:true,  canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'Regulatory Approver':    { canView:'all',    canUpload:false, canReview:false, canApprove:true,  canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'Sponsor Representative': { canView:'all',    canUpload:false, canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:true,  canSetMilestones:false, canCreateStudy:false, canViewAudit:true },
+  'Sponsor Rep':            { canView:'all',    canUpload:false, canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:true,  canSetMilestones:false, canCreateStudy:false, canViewAudit:true },
+  'Data Manager / Author':  { canView:'scoped', canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'Site User':              { canView:'site',   canUpload:true,  canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false },
+  'System Administrator':   { canView:'all',    canUpload:true,  canReview:true,  canApprove:true,  canAdmin:true,  canLock:true,  canExport:true,  canSetMilestones:true,  canCreateStudy:true  },
+  'Inspector / Auditor':    { canView:'all',    canUpload:false, canReview:false, canApprove:false, canAdmin:false, canLock:false, canExport:false, canSetMilestones:false, canCreateStudy:false, canViewAudit:true },
+};
+
+// Fixed Read-Only Permissions Matrix (Ref 1 screen-permissions: 8 permissions x 5 clinical roles)
+export const FIXED_PERMISSIONS_MATRIX = {
+  readOnly: true,
+  rule: 'Role permissions are fixed by regulatory policy (21 CFR Part 11 & ICH E6 GCP) and cannot be modified by System Administrators (Ref 1 Screen 8).',
+  roles: ['System Administrator', 'TMF Manager', 'CRA / Author', 'Reviewer', 'Approver', 'Sponsor Representative', 'Site User', 'Inspector / Auditor'],
+  rows: [
+    { permission: 'Upload documents',    systemAdmin: false, tmfManager: true,  cra: true,  reviewer: false, approver: false, sponsorRep: false },
+    { permission: 'View documents',      systemAdmin: false, tmfManager: true,  cra: true,  reviewer: true,  approver: true,  sponsorRep: true  },
+    { permission: 'Review documents',    systemAdmin: false, tmfManager: true,  cra: false, reviewer: true,  approver: false, sponsorRep: false },
+    { permission: 'Approve documents',   systemAdmin: false, tmfManager: false, cra: false, reviewer: false, approver: true,  sponsorRep: false },
+    { permission: 'Set milestone dates', systemAdmin: false, tmfManager: true,  cra: false, reviewer: false, approver: false, sponsorRep: false },
+    { permission: 'Create study',        systemAdmin: false, tmfManager: true,  cra: false, reviewer: false, approver: false, sponsorRep: false },
+    { permission: 'View audit trail',    systemAdmin: true,  tmfManager: true,  cra: false, reviewer: false, approver: false, sponsorRep: true  },
+    { permission: 'Export documents',    systemAdmin: false, tmfManager: true,  cra: false, reviewer: false, approver: false, sponsorRep: true  },
+  ]
 };
 
 export function requireAuth(req, res, next) {
@@ -67,6 +91,22 @@ export function requireAuth(req, res, next) {
       sessionId: session.id 
     };
     req.tenantId = user.tenant_id;
+
+    // C-10: Enforce tenant IP allowlist if configured in tenants.settings.ipAllowlist
+    try {
+      const tenantRow = db.prepare('SELECT settings FROM tenants WHERE id = ?').get(user.tenant_id);
+      if (tenantRow?.settings) {
+        const settings = JSON.parse(tenantRow.settings);
+        if (Array.isArray(settings.ipAllowlist) && settings.ipAllowlist.length > 0) {
+          const clientIp = (req.ip || req.connection?.remoteAddress || '127.0.0.1').replace('::ffff:', '');
+          const isLocal = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === 'localhost';
+          if (!isLocal && !settings.ipAllowlist.includes(clientIp) && !settings.ipAllowlist.includes('*')) {
+            return res.status(403).json({ error: `Access denied from IP ${clientIp} by tenant IP allowlist policy`, code: 'IP_NOT_ALLOWED' });
+          }
+        }
+      }
+    } catch (e) {}
+
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -112,11 +152,16 @@ export function blockInspector(req, res, next) {
 
 // Study lock guard — no writes to locked study
 export function requireUnlockedStudy(req, res, next) {
-  const studyId = req.params.studyId || req.body.studyId;
-  if (!studyId) return next();
   const db = getDB();
-  const study = db.prepare('SELECT locked FROM studies WHERE id = ? AND tenant_id = ?').get(studyId, req.tenantId);
-  if (study?.locked) {
+  let studyId = req.params.studyId || req.body?.studyId || req.body?.study_id || req.query?.studyId;
+  if (!studyId && (req.params.id || req.params.docId)) {
+    const docId = req.params.docId || req.params.id;
+    const doc = db.prepare('SELECT study_id FROM documents WHERE id = ? AND tenant_id = ?').get(docId, req.tenantId);
+    if (doc?.study_id) studyId = doc.study_id;
+  }
+  if (!studyId) return next();
+  const study = db.prepare('SELECT locked, status FROM studies WHERE id = ? AND tenant_id = ?').get(studyId, req.tenantId);
+  if (study?.locked || study?.status === 'Locked' || study?.status === 'Archived') {
     return res.status(423).json({ error: 'Study is locked. No modifications permitted.', code: 'STUDY_LOCKED' });
   }
   next();

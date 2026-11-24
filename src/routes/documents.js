@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import fs, { mkdirSync, existsSync, createReadStream, statSync } from 'fs';
 import crypto from 'crypto';
 import { getDB, appendAudit } from '../database.js';
-import { requireAuth, requireCap, blockInspector } from '../middleware/auth.js';
+import { requireAuth, requireCap, blockInspector, requireUnlockedStudy } from '../middleware/auth.js';
 import { generateCompliantRendition, isPdfFile } from '../services/pdfRendition.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -106,6 +106,15 @@ router.get('/', (req, res) => {
     where.push("d.zone IN ('02')"); // Data management zones only
   }
 
+  // C-03 / Ref 3 Step 19 / Ref 2 INSP-003: Inspector Mode & Inspector/Auditor role filtering
+  // Inspectors must NEVER see Drafts, In-Review/Approval docs, or Unblinded/Confidential records
+  const isInspectorMode = req.user.role === 'Inspector / Auditor' || req.query.inspectorMode === 'true' || req.headers['x-inspector-mode'] === 'true';
+  if (isInspectorMode) {
+    where.push("d.status IN ('Approved', 'Effective', 'Published', 'Signed Off')");
+    where.push('COALESCE(d.is_blinded, 0) = 0');
+    where.push('COALESCE(d.confidential, 0) = 0');
+  }
+
   const sql = `
     SELECT d.*, 
            au.name as author_name,
@@ -151,6 +160,15 @@ router.get('/:id', (req, res) => {
 
   if (!doc) return res.status(404).json({ error: 'Document not found' });
 
+  // C-03: Block Inspector / Inspector Mode from viewing Draft, in-review, or blinded documents
+  const isInspectorMode = req.user.role === 'Inspector / Auditor' || req.query.inspectorMode === 'true' || req.headers['x-inspector-mode'] === 'true';
+  if (isInspectorMode && (!['Approved', 'Effective', 'Published', 'Signed Off'].includes(doc.status) || doc.is_blinded || doc.confidential)) {
+    return res.status(403).json({
+      error: 'Inspectors are restricted to Approved, unblinded documents only (Ref 3 Step 19 / 21 CFR Part 11).',
+      code: 'INSPECTOR_RESTRICTED_DOCUMENT'
+    });
+  }
+
   const history = db.prepare(`
     SELECT wh.*, u.name as user_name, es.sig_hash, es.meaning as sig_meaning
     FROM workflow_history wh
@@ -170,7 +188,7 @@ router.get('/:id', (req, res) => {
 });
 
 // ── POST /api/documents — upload new document ────────────────
-router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'), async (req, res) => {
+router.post('/', blockInspector, requireUnlockedStudy, requireCap('canUpload'), upload.single('file'), async (req, res) => {
   const db = getDB();
   const body = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body;
 
@@ -185,6 +203,12 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
     return res.status(400).json({ error: 'studyId, artifactCode, and title are required' });
   }
 
+  // Re-verify study is not locked when studyId comes inside JSON body.data
+  const targetStudy = db.prepare('SELECT protocol_number, locked, status FROM studies WHERE id = ? AND tenant_id = ?').get(studyId, req.tenantId);
+  if (targetStudy?.locked || targetStudy?.status === 'Locked' || targetStudy?.status === 'Archived') {
+    return res.status(423).json({ error: 'Study is locked. No modifications permitted.', code: 'STUDY_LOCKED' });
+  }
+
   const resolvedArtifactName = artifactName || title || 'Clinical Document';
   const resolvedDisplayName = displayName || title;
   const resolvedZone = zone || (artifactCode ? artifactCode.split('.')[0] : '01');
@@ -193,7 +217,45 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   const resolvedSectionLabel = sectionLabel || `Section ${resolvedSection}`;
   const resolvedStatus = workflowType === 'AutoPublish' ? 'Published' : status;
 
-  const docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+  // C-11 / Ref 2 §8.2: Token-based Document Numbering Engine (with uniqueness guarantee)
+  let docId = `DOC-${Date.now()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+  try {
+    const tenantRow = db.prepare('SELECT settings FROM tenants WHERE id = ?').get(req.tenantId);
+    const settings = JSON.parse(tenantRow?.settings || '{}');
+    if (settings.numberingFormat) {
+      const seqCount = (db.prepare('SELECT COUNT(*) as c FROM documents WHERE tenant_id = ?').get(req.tenantId)?.c || 0) + 1;
+      const studyCode = (targetStudy?.protocol_number || studyId || 'STUDY').replace(/[^A-Za-z0-9-]/g, '');
+      const yearStr = String(new Date().getFullYear());
+      const paddedSeq = String(seqCount).padStart(4, '0') + '-' + Math.random().toString(36).slice(2, 5).toUpperCase();
+      docId = settings.numberingFormat
+        .replace(/\{STUDY\}/gi, studyCode)
+        .replace(/\{ARTIFACT_CODE\}|\{ARTIFACT\}/gi, (artifactCode || '01').replace(/\./g, ''))
+        .replace(/\{ZONE\}/gi, resolvedZone)
+        .replace(/\{COUNTRY\}/gi, country || 'GLB')
+        .replace(/\{SITE\}/gi, siteId || 'ALL')
+        .replace(/\{YEAR\}/gi, yearStr)
+        .replace(/\{0000\}|\{000\}|\{SEQ\}/gi, paddedSeq);
+    }
+  } catch (e) {}
+
+  // U-07 / Ref 3 Step 7: Auto-resolve Reviewer & Approver from Hierarchical Review Rules (Artifact > Zone > Study > Catch-all)
+  let resolvedReviewerId = reviewerId || null;
+  let resolvedApproverId = approverId || null;
+  if (!resolvedReviewerId || !resolvedApproverId) {
+    try {
+      const rules = db.prepare('SELECT * FROM review_rules WHERE study_id = ? AND tenant_id = ? ORDER BY priority ASC').all(studyId, req.tenantId);
+      const matched = rules.find(r =>
+        (r.scope_type === 'Artifact' && r.scope_target === artifactCode) ||
+        (r.scope_type === 'Zone' && (r.scope_target === resolvedZone || r.scope_target === `Zone ${Number(resolvedZone)}`)) ||
+        r.scope_type === 'Study' ||
+        r.scope_type === 'Catch-all'
+      );
+      if (matched) {
+        if (!resolvedReviewerId) resolvedReviewerId = matched.reviewer_id || null;
+        if (!resolvedApproverId) resolvedApproverId = matched.approver_id || null;
+      }
+    } catch (e) {}
+  }
   const file = req.file;
 
   // Streaming SHA-256 Binary Digest Computation (21 CFR Part 11 §11.70)
@@ -215,7 +277,7 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
   db.prepare(`
     INSERT INTO documents (id, tenant_id, study_id, artifact_code, artifact_name, zone, zone_label, section, section_label, title, display_name, workflow_type, version, status, file_path, file_name, file_type, file_size, file_sha256, confidential, mandatory, country, site_id, effective_date, expiry_date, author_id, reviewer_id, approver_id, signoff_id, ai_classified, ai_confidence, ai_overridden, metadata, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, resolvedDisplayName, workflowType, version, resolvedStatus, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, fileSha256, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, reviewerId, approverId, signoffId || null, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
+  `).run(docId, req.tenantId, studyId, artifactCode, resolvedArtifactName, resolvedZone, resolvedZoneLabel, resolvedSection, resolvedSectionLabel, title, resolvedDisplayName, workflowType, version, resolvedStatus, file?.path || null, file?.originalname || null, extname(file?.originalname || '').slice(1).toUpperCase() || null, file?.size || null, fileSha256, confidential ? 1 : 0, mandatory ? 1 : 0, country, siteId, effectiveDate, expiryDate, req.user.id, resolvedReviewerId, resolvedApproverId, signoffId || null, aiClassified ? 1 : 0, aiConfidence, aiOverridden ? 1 : 0, JSON.stringify(metadata), req.user.id);
 
   // Initial workflow history entry
   db.prepare('INSERT INTO workflow_history (id, document_id, tenant_id, from_state, to_state, user_id, comment) VALUES (?, ?, ?, ?, ?, ?, ?)')
@@ -231,7 +293,7 @@ router.post('/', blockInspector, requireCap('canUpload'), upload.single('file'),
 });
 
 // ── PATCH /api/documents/:id/metadata — edit metadata ────────
-router.patch('/:id/metadata', blockInspector, (req, res) => {
+router.patch('/:id/metadata', blockInspector, requireUnlockedStudy, (req, res) => {
   const db = getDB();
   const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(req.params.id, req.tenantId);
   if (!doc) return res.status(404).json({ error: 'Document not found' });
@@ -927,6 +989,69 @@ router.patch('/:id/blind', blockInspector, requireCap('canAdmin'), (req, res) =>
     is_blinded: targetBlind ? 1 : 0,
     document: db.prepare('SELECT * FROM documents WHERE id = ?').get(req.params.id)
   });
+});
+
+// C-26 / Ref 2 META-004: Bulk Metadata Edit with Per-Document ALCOA+ Audit Trail
+router.post('/bulk-metadata', blockInspector, requireUnlockedStudy, (req, res) => {
+  const db = getDB();
+  const { documentIds = [], updates = {}, reason } = req.body;
+  if (!Array.isArray(documentIds) || documentIds.length === 0) {
+    return res.status(400).json({ error: 'documentIds array is required' });
+  }
+  if (!reason || !String(reason).trim()) {
+    return res.status(400).json({ error: 'Reason for change is mandatory for ALCOA+ bulk metadata update', code: 'REASON_REQUIRED' });
+  }
+  const allowedFields = ['country', 'site_id', 'effective_date', 'expiry_date', 'language', 'format', 'keywords', 'sponsor_doc_code'];
+  const fieldsToUpdate = Object.keys(updates).filter(k => allowedFields.includes(k));
+  if (!fieldsToUpdate.length) return res.status(400).json({ error: 'No valid metadata fields provided in updates', allowedFields });
+
+  const setClause = fieldsToUpdate.map(k => `${k} = ?`).join(', ');
+  const values = fieldsToUpdate.map(k => updates[k]);
+  let updatedCount = 0;
+
+  const tx = db.transaction(() => {
+    documentIds.forEach(docId => {
+      const doc = db.prepare('SELECT * FROM documents WHERE id = ? AND tenant_id = ?').get(docId, req.tenantId);
+      if (doc) {
+        db.prepare(`UPDATE documents SET ${setClause} WHERE id = ? AND tenant_id = ?`).run(...values, docId, req.tenantId);
+        appendAudit({
+          tenantId: req.tenantId,
+          studyId: doc.study_id,
+          documentId: docId,
+          userId: req.user.id,
+          userName: req.user.name,
+          action: 'Bulk Metadata Updated',
+          objectType: 'document',
+          objectId: docId,
+          objectName: doc.title,
+          detail: `Reason: ${reason} | Fields: ${JSON.stringify(updates)}`,
+          ip: req.ip
+        });
+        updatedCount++;
+      }
+    });
+  });
+  tx();
+
+  res.json({ message: `Bulk metadata updated for ${updatedCount} document(s)`, updatedCount });
+});
+
+// C-28 / Ref 2 SRCH-004: Saved Searches & Shared Inspection Queries
+router.get('/saved-searches/list', (req, res) => {
+  const db = getDB();
+  const searches = db.prepare('SELECT * FROM saved_searches WHERE tenant_id = ? AND (user_id = ? OR is_shared = 1) ORDER BY created_at DESC').all(req.tenantId, req.user.id);
+  searches.forEach(s => { try { s.filters = JSON.parse(s.filters_json || '{}'); } catch (e) { s.filters = {}; } });
+  res.json({ savedSearches: searches });
+});
+
+router.post('/saved-searches/save', (req, res) => {
+  const db = getDB();
+  const { name, queryText = '', filters = {}, isShared = false } = req.body;
+  if (!name) return res.status(400).json({ error: 'Search name is required' });
+  const id = uuid();
+  db.prepare('INSERT INTO saved_searches (id, tenant_id, user_id, name, query_json, query_text, filters_json, is_shared) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, req.tenantId, req.user.id, name, JSON.stringify({ queryText, filters }), queryText, JSON.stringify(filters), isShared ? 1 : 0);
+  res.status(201).json({ savedSearch: db.prepare('SELECT * FROM saved_searches WHERE id = ?').get(id) });
 });
 
 export default router;
